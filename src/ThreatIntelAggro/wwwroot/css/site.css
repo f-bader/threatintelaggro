@@ -233,11 +233,11 @@ h2 { margin: 3px 0 0; color: #dbe2e9; font: 700 16px var(--sans); letter-spacing
 .ioc-confidence .ioc-row-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 .ioc-confidence .ioc-row-actions form { margin: 0; }
 .ioc-confidence .approve-ioc { border-color: #3e7884; background: #11252b; color: #91dce7; }
-.ioc-expiry-form { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); align-items: end; gap: 10px; padding: 14px 17px 8px; }
-.ioc-expiry-form label { display: grid; gap: 5px; min-width: 140px; color: #93a0ae; font: 9px var(--mono); }
+.ioc-expiry-form { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); align-items: start; gap: 10px; padding: 14px 17px 8px; }
+.ioc-expiry-form label { display: grid; align-content: start; gap: 5px; min-width: 0; color: #93a0ae; font: 9px var(--mono); }
 .ioc-expiry-form label small { color: #71808d; font-size: 8px; text-transform: none; }
 .ioc-expiry-form input { width: 100%; height: 32px; padding: 0 8px; border: 1px solid #303a46; background: #0b1016; color: #c2ccd6; font: 10px var(--mono); }
-.ioc-expiry-form .button { min-height: 32px; }
+.ioc-expiry-form .button { grid-column: 1/-1; justify-self: start; min-height: 32px; }
 .ioc-expiry-panel .form-footnote { margin: 0; padding: 4px 17px 14px; }
 .ioc-head-actions,.ioc-links { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .ioc-links .small-action { display: inline-flex; align-items: center; color: #a8b4c0; text-decoration: none; }
@@ -299,6 +299,7 @@ h2 { margin: 3px 0 0; color: #dbe2e9; font: 700 16px var(--sans); letter-spacing
 .ioc-exclusion-list form { margin: 0; }
 .ioc-exclusion-panel { padding-bottom: 5px; }
 @media (max-width:650px) { .adhoc-form,.ioc-exclusion-add { grid-template-columns: 1fr; gap: 9px; padding: 13px; } .adhoc-form .button { margin-top: 0; } .m365-exclusion-form { margin: 10px 13px; align-items: flex-start; } .ioc-exclusion-list { margin: 0 13px 10px; } .ioc-expiry-form { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; padding: 13px; } .ioc-expiry-form label { min-width: 0; } .ioc-expiry-form .button { grid-column: 1/-1; } .ioc-expiry-panel .form-footnote { padding: 4px 13px 12px; } .add-feed-auto-approve { min-height: 30px; } }
+@media (min-width:651px) and (max-width:1000px) { .ioc-expiry-form { grid-template-columns: repeat(3,minmax(0,1fr)); } }
 .opml-footer,.detection-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .opml-footer { justify-content: space-between; color: #778492; font: 9px var(--mono); }
 .detection-list { display: grid; gap: 10px; padding: 12px; }
