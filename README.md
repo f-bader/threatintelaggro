@@ -11,6 +11,16 @@ Selected direction: C# / ASP.NET Core Razor Pages, SQLite, server-rendered HTML,
 
 Run locally with `DOTNET_CLI_HOME="$PWD/.dotnet-cli" dotnet restore src/ThreatIntelAggro/ThreatIntelAggro.csproj`, then `AGGRO_DATA_DIR="$PWD/.local-data" DOTNET_CLI_HOME="$PWD/.dotnet-cli" dotnet run --project src/ThreatIntelAggro`. Open [http://localhost:5088](http://localhost:5088). The seeded Unit 42 feed is `https://unit42.paloaltonetworks.com/feed/` and imports entries from the last 14 days that the feed exposes. Run the container locally with `docker compose up --build`.
 
+The container runs as a non-root user and prepares `/data` for its persistent Compose volume. If you created that volume with an older image and startup fails with `Access to the path '/data/keys' is denied`, repair its ownership once, then start the app again:
+
+```sh
+docker compose run --rm --user 0:0 --entrypoint sh threat-intel-aggro -c 'chown -R "$APP_UID:$APP_UID" /data'
+docker compose up -d
+```
+
+This keeps the existing database and other volume contents. For a bind mount instead of the named volume, make the host directory writable by the container's app UID (1654).
+
+
 OpenAI is the primary AI provider. Azure OpenAI is an optional provider with explicit capability checks. Public source research and KQL assistance/validation use bounded tools; the MCP endpoint is `https://mcp.xdrinternals.com`.
 
 Each detection includes downloadable Defender XDR custom-detection YAML following the [XDRConverter schema](https://github.com/f-bader/XDRConverter), alongside JSON and KQL exports. KQL is checked with the XDR Internals MCP service. Exported rules default to disabled and require owner review before deployment.

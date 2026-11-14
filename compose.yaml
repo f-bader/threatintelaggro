@@ -7,6 +7,7 @@ services:
       - "127.0.0.1:5088:8080"
     environment:
       AGGRO_DATA_DIR: /data
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ASPNETCORE_ENVIRONMENT: Production
     volumes:
       - aggro-data:/data
