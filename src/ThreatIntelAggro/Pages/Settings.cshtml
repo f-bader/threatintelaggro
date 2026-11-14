@@ -1,0 +1,26 @@
+@page
+@model SettingsModel
+@{
+    ViewData["Title"] = "Settings";
+}
+<div class="page-heading"><div><div class="eyebrow">LOCAL CONTROLS / IOC HYGIENE</div><h1>Settings</h1><p class="subhead">Manage indicator exclusions applied across results and exports.</p></div><a class="button button-secondary" asp-page="/Index">← &nbsp;Back to inbox</a></div>
+@if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
+<section class="panel add-feed-panel ioc-exclusion-panel"><div class="panel-head"><div><div class="eyebrow">IOC QUALITY CONTROLS</div><h2>IOC exclusions <span class="count-chip">@Model.IocExclusions.Count</span></h2></div><span class="quiet-label">FILTERED FROM RESULTS, CSV, AND API</span></div>
+<form method="post" asp-page-handler="ToggleM365" class="m365-exclusion-form"><label><input type="checkbox" name="enabled" value="true" checked="@(Model.ExcludeM365)"/><span><strong>Exclude Microsoft 365 URLs and IP address ranges</strong><small>Official Microsoft endpoint data refreshes daily. @(DateTimeOffset.TryParse(Model.M365RefreshedUtc, out var m365Updated) ? $"Last refreshed {m365Updated.ToLocalTime():dd MMM yyyy · HH:mm}." : "Endpoint list is waiting for its first refresh.")</small></span></label><button class="small-action" type="submit">SAVE</button></form>
+@if (!string.IsNullOrWhiteSpace(Model.M365RefreshError)) { <p class="m365-error" title="@Model.M365RefreshError">Microsoft 365 endpoint refresh issue: @Model.M365RefreshError</p> }
+<form method="post" asp-page-handler="AddIocExclusion" class="ioc-exclusion-add"><label for="IocExclusion">Domain, IP address, or IP range<input asp-for="IocExclusion" id="IocExclusion" placeholder="example.com or 203.0.113.0/24" required maxlength="253"/></label><button class="button button-primary" type="submit">ADD EXCLUSION <span>＋</span></button></form>
+@if (Model.IocExclusions.Count > 0) { <div class="ioc-exclusion-list">@foreach (var exclusion in Model.IocExclusions) { <div><code>@exclusion["value"]</code><form method="post" asp-page-handler="RemoveIocExclusion"><input type="hidden" name="id" value="@exclusion["id"]"/><button class="small-action danger-action" type="submit" aria-label="Remove IOC exclusion @exclusion["value"]">REMOVE</button></form></div> }</div> }
+<p class="form-footnote">Domain entries also exclude subdomains. Use CIDR notation for ranges, such as 192.0.2.0/24. Existing article analyses are filtered when viewed; their saved raw analysis is retained.</p></section>
+<section class="panel ioc-expiry-panel"><div class="panel-head"><div><div class="eyebrow">IOC LIFETIME</div><h2>Automatic expiry</h2></div><span class="quiet-label">EXPIRED INDICATORS ARE HIDDEN FROM RESULTS AND API</span></div>
+<form method="post" asp-page-handler="SaveIocExpiry" class="ioc-expiry-form">
+<label>IP addresses / ranges<input asp-for="IpExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Domains<input asp-for="DomainExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>URLs<input asp-for="UrlExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>File hashes<input asp-for="HashExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Email addresses<input asp-for="EmailExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Browser / software IDs<input asp-for="SoftwareIdExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>File / path artifacts<input asp-for="FileArtifactExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Host artifacts<input asp-for="HostArtifactExpiryDays" type="number" min="0" max="3650" required/><small>Registry, mutex, RPC, named pipe</small></label>
+<label>Certificate thumbprints<input asp-for="CertificateExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Other / generic indicators<input asp-for="OtherExpiryDays" type="number" min="0" max="3650" required/></label>
+<button class="button button-primary" type="submit">SAVE LIFETIMES</button></form><p class="form-footnote">Defaults: IPs and URLs 90 days; domains, hashes, emails, software IDs, file and host artifacts 365 days; certificate thumbprints 730 days. Other types use 365 days. Set any value to 0 to disable expiry for that type. Changes affect current results and API responses immediately.</p></section>

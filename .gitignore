@@ -1,0 +1,7 @@
+.dotnet-cli/
+.local-data/
+**/bin/
+**/obj/
+**/App_Data/
+.env
+*.user
