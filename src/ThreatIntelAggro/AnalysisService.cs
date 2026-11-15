@@ -117,36 +117,28 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
                     allSources.Add(source);
                     sourceByUrl[urlKey] = source;
                 }
-                var searchSourceNo = 1;
-                foreach (var excerpt in searchExcerpts)
-                {
-                    var urlKey = SourceUrlKey(excerpt.Url);
-                    if (SameUrl(excerpt.Url, articleUrl)) continue;
-                    if (sourceByUrl.TryGetValue(urlKey, out var existingSource))
-                    {
-                        if (existingSource["inspection_status"]?.GetValue<string>() == "fetched") continue;
-                        var existingContent = existingSource["content"]?.GetValue<string>() ?? "";
-                        existingSource["inspection_status"] = "search_excerpt";
-                        existingSource["content"] = string.IsNullOrWhiteSpace(existingContent) ? excerpt.Content : existingContent + "\n\n" + excerpt.Content;
-                        if (string.IsNullOrWhiteSpace(existingSource["title"]?.GetValue<string>())) existingSource["title"] = excerpt.Title;
-                        continue;
-                    }
-                    var searchSource = new JsonObject { ["source_id"] = $"src_search_{searchSourceNo++:00}", ["title"] = excerpt.Title, ["url"] = excerpt.Url, ["kind"] = "related_report", ["inspection_status"] = "search_excerpt", ["content"] = excerpt.Content };
-                    allSources.Add(searchSource);
-                    sourceByUrl[urlKey] = searchSource;
-                }
-                var sourceLedger = new JsonArray(allSources.Select(source => new JsonObject
-                {
-                    ["source_id"] = source?["source_id"]?.DeepClone(),
-                    ["title"] = source?["title"]?.DeepClone(),
-                    ["url"] = source?["url"]?.DeepClone(),
-                    ["kind"] = source?["kind"]?.DeepClone(),
-                    ["inspection_status"] = source?["inspection_status"]?.DeepClone()
-                }).ToArray());
+                AddSearchExcerptSources(allSources, sourceByUrl, searchExcerpts);
+                var sourceLedger = CreateSourceLedger(allSources);
                 currentStage = "article-analysis"; rawOutput = null;
-                var articleJson = await CallModelAsync(key, "Analyze the article and source ledger. Output exactly the requested JSON contract. Cite only supplied source_id values; IOC evidence excerpts must be exact substrings of that source's stored content and contain the IOC value. Every summary, key finding, IOC, detection assessment, and mapping evidence item must include source_id, locator, and an exact excerpt from stored source content. A source marked search_excerpt is only a short web-search excerpt: do not imply the full page was fetched, and describe this limitation in coverage. An inaccessible source cannot support claims. Reference title, URL, kind and inspection_status must exactly match the supplied ledger. Use only documented IOC types and roles. Prefer no mapping over unsupported claims. Include IOCs only with context and evidence. Industries mean targeted victim sectors; return one distinct sector per industries array item, never a comma-separated or grouped list. Vendors mean affected-product vendors. For code references, analysis is not code inspection unless source text is supplied; a search excerpt alone does not establish code behavior. detection_assessment is advisory. Use confidence low/medium/high and basis source_reported/inferred. Assign exactly one article category: Time-Critical Threat for credible active exploitation or urgent live threats; Novel Research for genuinely new original findings, techniques, or actor activity; Actionable IOCs for credible, useful indicators that are not time-critical; Existing Research for corroborative or derivative coverage with little new value; Discard only for spam, unrelated, placeholder-only, or clearly negligible material. Do not equate recency with urgency or the presence of an IOC with high value. Include category_rationale as one concise sentence grounded in the supplied sources.",
-                    JsonSerializer.Serialize(new { article = new { id, title = row["title"], url = articleUrl, summary = row["summary"] }, sources = allSources }), ArticleSchema(), false, ct, id, stageKey: "article-analysis");
-                rawOutput = articleJson;
+                var articleInstructions = "Analyze the article and source ledger. Output exactly the requested JSON contract. Cite only supplied source_id values; IOC evidence excerpts must be exact substrings of that source's stored content and contain the IOC value. Every summary, key finding, IOC, detection assessment, and mapping evidence item must include source_id, locator, and an exact excerpt from stored source content. A source marked search_excerpt is only a short web-search excerpt: do not imply the full page was fetched, and describe this limitation in coverage. An inaccessible source cannot support claims. Reference title, URL, kind and inspection_status must exactly match the supplied ledger. Use only documented IOC types and roles. Prefer no mapping over unsupported claims. Include IOCs only with context and evidence. Industries mean targeted victim sectors; return one distinct sector per industries array item, never a comma-separated or grouped list. Vendors mean affected-product vendors. For code references, analysis is not code inspection unless source text is supplied; a search excerpt alone does not establish code behavior. detection_assessment is advisory. Use confidence low/medium/high and basis source_reported/inferred. Assign exactly one article category: Time-Critical Threat for credible active exploitation or urgent live threats; Novel Research for genuinely new original findings, techniques, or actor activity; Actionable IOCs for credible, useful indicators that are not time-critical; Existing Research for corroborative or derivative coverage with little new value; Discard only for spam, unrelated, placeholder-only, or clearly negligible material. Do not equate recency with urgency or the presence of an IOC with high value. Include category_rationale as one concise sentence grounded in the supplied sources.";
+                if (!articleFetched) articleInstructions += " The original article was denied by direct HTTP retrieval. Use web search in this same analysis stage to inspect the exact article URL and analyze all article text the search tool makes available. Do not reduce the result to related-source summaries. When search returns the original article text, include at least three and up to eight short, exact quotes from it in search_excerpts, with its exact URL, so evidence can be checked and the source can be labeled search_excerpt. Never present the page as directly fetched. If search does not expose the article text, use only the fetched related sources and state that limitation.";
+                var articleResponse = await CallModelAsync(key, articleInstructions,
+                    JsonSerializer.Serialize(new { article = new { id, title = row["title"], url = articleUrl, summary = row["summary"], direct_fetch_status = articleFetched ? "fetched" : "denied" }, sources = allSources }),
+                    articleFetched ? ArticleSchema() : ArticleSearchSchema(), !articleFetched, ct, id, stageKey: "article-analysis", requireSearch: !articleFetched);
+                rawOutput = articleResponse;
+                var articleJson = articleResponse;
+                if (!articleFetched)
+                {
+                    var articleCitations = db.Query("SELECT search_citations_json FROM analysis_responses WHERE article_id=? AND stage_key='article-analysis'", id).FirstOrDefault()?["search_citations_json"] ?? "[]";
+                    var articleExcerpts = BuildSearchExcerptSources(articleResponse, articleCitations).Where(x => SameUrl(x.Url, articleUrl));
+                    AddSearchExcerptSources(allSources, sourceByUrl, articleExcerpts);
+                    sourceLedger = CreateSourceLedger(allSources);
+                    var responseNode = JsonNode.Parse(articleResponse)?.AsObject() ?? throw new InvalidOperationException("Fallback article analysis returned invalid JSON.");
+                    responseNode.Remove("search_excerpts");
+                    NormalizeReferenceMetadata(responseNode, allSources);
+                    articleJson = responseNode.ToJsonString();
+                    rawOutput = articleJson;
+                }
                 try { ArticleEvidenceValidator.Validate(articleJson, allSources, ArticleSchema()); }
                 catch
                 {
@@ -455,6 +447,49 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
         return result.DistinctBy(x => (SourceUrlKey(x.Url), x.Content)).ToList();
     }
 
+    private static void AddSearchExcerptSources(JsonArray sources, Dictionary<string, JsonObject> sourceByUrl, IEnumerable<(string Url, string Title, string Content)> excerpts)
+    {
+        var nextId = 1;
+        foreach (var excerpt in excerpts)
+        {
+            var urlKey = SourceUrlKey(excerpt.Url);
+            if (sourceByUrl.TryGetValue(urlKey, out var existingSource))
+            {
+                if (existingSource["inspection_status"]?.GetValue<string>() == "fetched") continue;
+                var existingContent = existingSource["content"]?.GetValue<string>() ?? "";
+                if (!existingContent.Contains(excerpt.Content, StringComparison.Ordinal))
+                    existingSource["content"] = string.IsNullOrWhiteSpace(existingContent) ? excerpt.Content : existingContent + "\n\n" + excerpt.Content;
+                existingSource["inspection_status"] = "search_excerpt";
+                if (string.IsNullOrWhiteSpace(existingSource["title"]?.GetValue<string>())) existingSource["title"] = excerpt.Title;
+                continue;
+            }
+            while (sourceByUrl.Values.Any(x => x["source_id"]?.GetValue<string>() == $"src_search_{nextId:00}")) nextId++;
+            var searchSource = new JsonObject { ["source_id"] = $"src_search_{nextId++:00}", ["title"] = excerpt.Title, ["url"] = excerpt.Url, ["kind"] = "related_report", ["inspection_status"] = "search_excerpt", ["content"] = excerpt.Content };
+            sources.Add(searchSource);
+            sourceByUrl[urlKey] = searchSource;
+        }
+    }
+
+    private static JsonArray CreateSourceLedger(JsonArray sources) => new(sources.Select(source => new JsonObject
+    {
+        ["source_id"] = source?["source_id"]?.DeepClone(),
+        ["title"] = source?["title"]?.DeepClone(),
+        ["url"] = source?["url"]?.DeepClone(),
+        ["kind"] = source?["kind"]?.DeepClone(),
+        ["inspection_status"] = source?["inspection_status"]?.DeepClone()
+    }).ToArray());
+
+    private static void NormalizeReferenceMetadata(JsonObject analysis, JsonArray sources)
+    {
+        var sourceById = sources.Where(x => x is not null).ToDictionary(x => x!["source_id"]!.GetValue<string>(), x => x!, StringComparer.Ordinal);
+        if (analysis["references"] is not JsonArray references) return;
+        foreach (var reference in references)
+        {
+            if (reference?["source_id"]?.GetValue<string>() is not { } id || !sourceById.TryGetValue(id, out var source)) continue;
+            foreach (var property in new[] { "url", "title", "kind", "inspection_status" }) reference[property] = source[property]?.DeepClone();
+        }
+    }
+
     private static bool SameUrl(string a, string b) => string.Equals(SourceUrlKey(a), SourceUrlKey(b), StringComparison.Ordinal);
 
     private static string SourceUrlKey(string value)
@@ -484,6 +519,13 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
     }
 
     private static JsonObject ResearchSchema() => new() { ["type"]="object", ["additionalProperties"]=false, ["required"]=new JsonArray("related_sources","search_excerpts"), ["properties"]=new JsonObject { ["related_sources"] = new JsonObject { ["type"]="array", ["items"]=new JsonObject { ["type"]="object", ["additionalProperties"]=false, ["required"]=new JsonArray("title","url","kind"), ["properties"]=new JsonObject { ["title"]=new JsonObject { ["type"]="string" },["url"]=new JsonObject { ["type"]="string" },["kind"]=new JsonObject { ["type"]=new JsonArray("string"),["enum"]=new JsonArray("related_report","code","document") } } } }, ["search_excerpts"] = new JsonObject { ["type"]="array", ["items"]=new JsonObject { ["type"]="object", ["additionalProperties"]=false, ["required"]=new JsonArray("title","url","excerpt"), ["properties"]=new JsonObject { ["title"]=Str(), ["url"]=Str(), ["excerpt"]=Str() } } } } };
+    private static JsonObject ArticleSearchSchema()
+    {
+        var schema = (JsonObject)ArticleSchema().DeepClone();
+        schema["required"]!.AsArray().Add("search_excerpts");
+        schema["properties"]!.AsObject()["search_excerpts"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object", ["additionalProperties"] = false, ["required"] = new JsonArray("title", "url", "excerpt"), ["properties"] = new JsonObject { ["title"] = Str(), ["url"] = Str(), ["excerpt"] = Str() } } };
+        return schema;
+    }
     private static JsonObject ArticleSchema() => new() { ["type"]="object",["additionalProperties"]=false,["required"]=new JsonArray("schema_version","language","category","category_rationale","summary","iocs","references","mitre_mappings","industries","threat_actors","vendors","products","malware","campaigns","vulnerabilities","targeted_countries","detection_assessment","coverage"),["properties"]=new JsonObject {
         ["schema_version"]=new JsonObject { ["type"]="string", ["enum"]=new JsonArray("1.1") },["language"]=NullableStr(),["category"]=new JsonObject { ["type"]="string",["enum"]=new JsonArray(ArticleCategories.TimeCritical,ArticleCategories.NovelResearch,ArticleCategories.ActionableIocs,ArticleCategories.ExistingResearch,ArticleCategories.Discard) },["category_rationale"]=Str(),["summary"]=new JsonObject { ["type"]="object",["additionalProperties"]=false,["required"]=new JsonArray("headline","overview","key_findings","evidence"),["properties"]=new JsonObject { ["headline"]=Str(),["overview"]=Str(),["key_findings"]=Arr(Finding("text")),["evidence"]=Arr(Evidence()) } },
         ["iocs"]=Arr(new JsonObject { ["type"]="object",["additionalProperties"]=false,["required"]=new JsonArray("type","value","normalized_value","role","context","confidence","basis","evidence"),["properties"]=new JsonObject { ["type"]=Str(),["value"]=Str(),["normalized_value"]=NullableStr(),["role"]=Str(),["context"]=Str(),["confidence"]=Str(),["basis"]=Str(),["evidence"]=Arr(Evidence()) } }),
