@@ -47,6 +47,28 @@ public sealed class MediumFindingsTests
         Assert.Null(db.Query("SELECT last_error FROM feeds WHERE id=1").Single()["last_error"]);
     }
 
+    [Fact]
+    public async Task FeedRefreshPrefersPublicationDateOverLaterUpdatedDate()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        db.Execute("INSERT INTO feeds(title,url,created_utc) VALUES(?,?,?)", "Fixture feed", "https://example.test/feed.xml", DateTimeOffset.UtcNow.ToString("O"));
+        var feedXml = """
+            <feed><title>Fixture feed</title><entry>
+              <title>Published article</title><link href="https://example.test/article"/>
+              <updated>2026-11-14T18:56:00Z</updated><published>2026-11-12T16:20:00Z</published>
+            </entry></feed>
+            """;
+        using var fetcher = new SafePublicFetcher(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(feedXml, Encoding.UTF8, "application/atom+xml") }));
+        var reader = new FeedReader(fetcher, db, NullLogger<FeedReader>.Instance);
+
+        Assert.Equal(1, await reader.RefreshAsync(1));
+
+        var article = db.Query("SELECT published_utc,first_seen_utc FROM articles").Single();
+        Assert.Equal("2026-11-12T16:20:00.0000000+00:00", article["published_utc"]);
+        Assert.NotEqual(article["published_utc"], article["first_seen_utc"]);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("192.0.2.15")]
@@ -151,12 +173,37 @@ public sealed class MediumFindingsTests
         Assert.Equal(2, page.ContextCount);
         Assert.Equal(1, page.PendingCount);
         var tokens = page.Records.Select(IocsModel.BulkToken).ToArray();
+        Assert.IsType<BadRequestObjectResult>(page.OnPostBulkClassify(Enumerable.Repeat(tokens[0], 501).ToArray(), "suspicious"));
         Assert.IsType<BadRequestObjectResult>(page.OnPostBulkClassify([tokens[0], tokens[0]], "suspicious"));
         Assert.Equal(0, db.ScalarInt("SELECT COUNT(*) FROM ioc_role_overrides"));
         Assert.IsType<BadRequestObjectResult>(page.OnPostBulkClassify(tokens, "unknown"));
         Assert.IsType<RedirectToPageResult>(page.OnPostBulkClassify(tokens, "suspicious"));
         Assert.Equal("one.example", Assert.Single(IocIndex.Read(db)).Value);
         Assert.Equal(2, IocIndex.Read(db, includeUnapproved: true).Count);
+    }
+
+    [Fact]
+    public void BulkApproveAndDismissValidateSelectionAndPreserveApproval()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,analysis_json) VALUES(?,?,?,?,?,?)", "Fixture", "Fixture", "https://example.org", "", now, """{"iocs":[{"type":"domain","value":"malicious.example","role":"malicious"},{"type":"domain","value":"suspicious.example","role":"suspicious"},{"type":"domain","value":"context.example","role":"unknown"}]}""");
+        var page = new IocsModel(db);
+        page.OnGet();
+        var records = page.Records.ToDictionary(x => x.Value, IocsModel.BulkToken);
+
+        Assert.IsType<BadRequestObjectResult>(page.OnPostBulkReview([records["malicious.example"], records["context.example"]], "approve", null));
+        Assert.Equal(0, db.ScalarInt("SELECT COUNT(*) FROM ioc_approvals"));
+
+        Assert.IsType<RedirectToPageResult>(page.OnPostBulkReview([records["malicious.example"], records["suspicious.example"]], "approve", null));
+        Assert.Equal(2, db.ScalarInt("SELECT COUNT(*) FROM ioc_approvals"));
+        Assert.All(IocIndex.Read(db, includeUnapproved: true), ioc => Assert.True(ioc.Approved));
+
+        Assert.IsType<RedirectToPageResult>(page.OnPostBulkReview([records["malicious.example"], records["context.example"]], "dismiss", null));
+        Assert.Equal(2, db.ScalarInt("SELECT COUNT(*) FROM ioc_dismissals"));
+        Assert.Equal(2, db.ScalarInt("SELECT COUNT(*) FROM ioc_approvals"));
+        Assert.Equal("suspicious.example", Assert.Single(IocIndex.Read(db, includeUnapproved: true)).Value);
     }
 
     [Fact]

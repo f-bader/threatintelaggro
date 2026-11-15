@@ -92,9 +92,16 @@ public sealed class IocsModel(AppDatabase database) : PageModel
     private sealed record BulkIndicator(long ArticleId, string Type, string Value);
     public static string BulkToken(IocRecord record) => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new BulkIndicator(long.Parse(record.ArticleId, System.Globalization.CultureInfo.InvariantCulture), record.Type, record.Value)));
 
-    public IActionResult OnPostBulkClassify(string[]? selection, string? bulkRole)
+    public IActionResult OnPostBulkReview(string[]? selection, string? operation, string? bulkRole) => ApplyBulkReview(selection, operation, bulkRole);
+
+    public IActionResult OnPostBulkClassify(string[]? selection, string? bulkRole) => ApplyBulkReview(selection, "classify", bulkRole);
+
+    private IActionResult ApplyBulkReview(string[]? selection, string? operation, string? bulkRole)
     {
-        if (selection is null || selection.Length is < 1 or > 200 || bulkRole is not ("malicious" or "suspicious")) return BadRequest("Select 1–200 indicators and a classification.");
+        if (selection is null || selection.Length is < 1 or > 500) return BadRequest("Select 1–500 indicators.");
+        if (operation is not ("classify" or "approve" or "dismiss")) return BadRequest("Choose a valid bulk action.");
+        if (operation == "classify" && bulkRole is not ("malicious" or "suspicious")) return BadRequest("Choose a classification.");
+
         var selected = new List<BulkIndicator>();
         try
         {
@@ -107,18 +114,40 @@ public sealed class IocsModel(AppDatabase database) : PageModel
             }
         }
         catch (Exception ex) when (ex is FormatException or JsonException) { return BadRequest("Invalid selection."); }
+
         try
         {
             database.Transaction(() =>
             {
+                string Key(IocRecord ioc) => IocIndex.DismissalKey(ioc.ArticleId, ioc.Type, ioc.Value);
                 var current = IocIndex.Read(database, includeUnapproved: true, includeNonActionable: true)
-                    .Where(x => !IocIndex.IsActionableRole(x.Role)).Select(x => IocIndex.DismissalKey(x.ArticleId, x.Type, x.Value)).ToHashSet(StringComparer.Ordinal);
+                    .GroupBy(Key, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+                var now = DateTimeOffset.UtcNow.ToString("O");
                 foreach (var item in selected)
-                    if (!current.Remove(IocIndex.DismissalKey(item.ArticleId.ToString(System.Globalization.CultureInfo.InvariantCulture), item.Type, item.Value)) || !IocIndex.SetReviewedRole(database, item.ArticleId, item.Type, item.Value, bulkRole))
-                        throw new InvalidOperationException("A selected indicator is no longer available for review.");
+                {
+                    var key = IocIndex.DismissalKey(item.ArticleId.ToString(System.Globalization.CultureInfo.InvariantCulture), item.Type, item.Value);
+                    if (!current.Remove(key, out var ioc)) throw new InvalidOperationException("A selected indicator is no longer available for this action.");
+                    var actionable = IocIndex.IsActionableRole(ioc.Role);
+                    switch (operation)
+                    {
+                        case "classify":
+                            if (actionable || !IocIndex.SetReviewedRole(database, item.ArticleId, item.Type, item.Value, bulkRole))
+                                throw new InvalidOperationException("Classification applies only to selected context-only indicators.");
+                            break;
+                        case "approve":
+                            if (!actionable || ioc.Approved) throw new InvalidOperationException("Approval applies only to selected, unapproved suspicious or malicious indicators.");
+                            IocIndex.Approve(database, item.ArticleId, item.Type, item.Value);
+                            break;
+                        case "dismiss":
+                            database.Execute("INSERT OR IGNORE INTO ioc_dismissals(article_id,ioc_type,ioc_value,dismissed_utc) VALUES(?,?,?,?)", item.ArticleId, item.Type, item.Value, now);
+                            break;
+                    }
+                }
             });
         }
         catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+
         return RedirectToPage(new { days = Days, vendor = Vendor, industry = Industry, type = Type, search = Search, state = State, approval = Approval, classification = Classification, includeUnapproved = IncludeUnapproved });
     }
 

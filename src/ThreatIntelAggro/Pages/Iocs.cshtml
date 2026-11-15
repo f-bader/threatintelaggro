@@ -17,8 +17,17 @@
   <label class="ioc-search">Search<input name="search" value="@Model.Search" placeholder="Value, context, article…"/></label><label class="ioc-api-toggle"><input type="checkbox" name="includeUnapproved" value="true" checked="@(Model.IncludeUnapproved)"/><span>Include unapproved in API example</span></label><span class="ioc-auto-apply"><i></i> AUTO APPLY</span>
  </form>
  <div class="ioc-review-summary"><strong>Within this time range: @Model.TotalInRange total</strong><span>@Model.ContextCount context only</span><span>@Model.PendingCount unapproved</span><span>@Model.ExpiredCount expired</span><span>@Model.ExcludedCount excluded</span><span>@Model.ArchivedCount archived</span><small>Counts can overlap and do not reflect the other filters.</small></div>
- @if (Model.State != "archived" && Model.Records.Any(x => !IocIndex.IsActionableRole(x.Role))) {
-  <form id="bulk-classify-form" method="post" asp-page-handler="BulkClassify" class="ioc-bulk-review"><partial name="_IocFilterFields" model="Model"/><label>Classify selected <select name="bulkRole" aria-label="Classification for selected indicators" required><option value="">Choose classification…</option><option value="suspicious">Suspicious</option><option value="malicious">Malicious</option></select></label><button class="small-action approve-ioc" type="submit">CLASSIFY SELECTED</button><small>Review each indicator before selecting it. Previously approved items become API eligible when classified.</small></form>
+ @if (Model.State != "archived" && Model.Records.Count > 0) {
+  <form id="bulk-classify-form" method="post" asp-page-handler="BulkReview" class="ioc-bulk-review" data-bulk-selection>
+   <partial name="_IocFilterFields" model="Model"/>
+   <label class="bulk-select-all"><input type="checkbox" data-select-visible/><span>SELECT VISIBLE</span></label>
+   <span class="bulk-selection-count" data-selection-count aria-live="polite">0 selected</span>
+   <label>Classify selected<select name="bulkRole" data-selection-role aria-label="Classification for selected indicators"><option value="">Choose classification…</option><option value="suspicious">Suspicious</option><option value="malicious">Malicious</option></select></label>
+   <button class="small-action approve-ioc" data-selection-action="classify" type="submit" name="operation" value="classify" disabled>CLASSIFY SELECTED</button>
+   <button class="small-action approve-ioc" data-selection-action="approve" type="submit" name="operation" value="approve" disabled>APPROVE SELECTED</button>
+   <button class="small-action" data-selection-action="dismiss" type="submit" name="operation" value="dismiss" disabled>DISMISS SELECTED</button>
+   <small>Classify context-only IOCs; approve unapproved suspicious or malicious IOCs; dismiss any selected items. Existing approvals are retained when classifying.</small>
+  </form>
  }
  @if (Model.Records.Count == 0) { <div class="empty-state"><div class="empty-icon">⌁</div><h3>No indicators match</h3><p>Try a wider time range or clear one of the filters.</p></div> }
  <div class="ioc-list">
@@ -26,7 +35,7 @@
   var actionable = IocIndex.IsActionableRole(ioc.Role);
   var roleClass = IocIndex.MatchesClassification(ioc.Role, "suspicious") ? "ioc-role-suspicious" : IocIndex.MatchesClassification(ioc.Role, "malicious") ? "ioc-role-malicious" : "ioc-role-context";
   <article class="ioc-row">
-   <div class="ioc-type">@ioc.Type @if (!actionable && Model.State != "archived") { <label class="ioc-select"><input type="checkbox" name="selection" form="bulk-classify-form" value="@IocsModel.BulkToken(ioc)"/> Select for review<span class="sr-only">: @ioc.Value</span></label> }</div>
+   <div class="ioc-type">@if (Model.State != "archived") { <label class="ioc-select"><input type="checkbox" data-selection-item data-actionable="@actionable.ToString().ToLowerInvariant()" data-approved="@ioc.Approved.ToString().ToLowerInvariant()" name="selection" form="bulk-classify-form" value="@IocsModel.BulkToken(ioc)" aria-label="Select indicator: @ioc.Value"/><span class="ioc-selection-marker" aria-hidden="true"></span><span class="sr-only">Select indicator: @ioc.Value</span></label> } else { <span class="ioc-selection-spacer" aria-hidden="true"></span> }<span class="ioc-type-label">@ioc.Type</span></div>
    <div class="ioc-main">
     <h3><code>@ioc.Value</code>@if (!string.IsNullOrWhiteSpace(ioc.NormalizedValue) && ioc.NormalizedValue != ioc.Value) { <small>Normalized: <code>@ioc.NormalizedValue</code></small> }</h3>
     <p>@ioc.Context</p>

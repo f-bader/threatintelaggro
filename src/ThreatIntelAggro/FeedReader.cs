@@ -36,7 +36,11 @@ public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, 
                 var linkNode = item.Elements().FirstOrDefault(x => x.Name.LocalName == "link" && ((string?)x.Attribute("rel") is null or "alternate"));
                 var itemUrl = CleanXmlCharacters((string?)linkNode?.Attribute("href") ?? Text(linkNode) ?? Text(item.Elements().FirstOrDefault(x => x.Name.LocalName is "guid" or "id")) ?? "");
                 if (!Uri.TryCreate(itemUrl, UriKind.Absolute, out var articleUri) || articleUri.Scheme is not ("https" or "http")) continue;
-                var dateText = Text(item.Elements().FirstOrDefault(x => x.Name.LocalName is "pubDate" or "published" or "updated" or "date"));
+                // A feed's updated timestamp can change after publication. Prefer
+                // explicit publication fields regardless of their XML order.
+                var dateNode = item.Elements().FirstOrDefault(x => x.Name.LocalName is "pubDate" or "published")
+                    ?? item.Elements().FirstOrDefault(x => x.Name.LocalName is "updated" or "date");
+                var dateText = Text(dateNode);
                 var hasDate = DateTimeOffset.TryParse(dateText, out var published);
                 if (hasDate && (published < earliest || published > now.AddDays(1))) continue;
                 var summaryNode = item.Elements().FirstOrDefault(x => x.Name.LocalName is "encoded" or "content" or "summary" or "description");

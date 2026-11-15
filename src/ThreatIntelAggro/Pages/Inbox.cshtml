@@ -29,7 +29,7 @@
     <label>Sort by<select name="sort"><option value="recent" selected="@(Model.Sort == "recent")">Newest first</option><option value="priority" selected="@(Model.Sort == "priority")">Category priority</option></select></label>
   </div></details></form>
  </div>
- <form method="post" asp-page-handler="Bulk" id="bulk-articles-form" class="bulk-article-toolbar" data-bulk-article-form>
+ <form method="post" asp-page-handler="Bulk" id="bulk-articles-form" class="bulk-article-toolbar" data-bulk-article-form data-bulk-selection>
    <input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/>
    <label class="bulk-select-all"><input type="checkbox" data-select-visible/><span>SELECT VISIBLE</span></label><span class="bulk-selection-count" data-selection-count aria-live="polite">0 selected</span>
    <div class="bulk-article-actions"><button class="mark-action" type="submit" name="operation" value="read" disabled>MARK READ</button><button class="mark-action" type="submit" name="operation" value="unread" disabled>MARK UNREAD</button><button class="mark-action" type="submit" name="operation" value="analyze" disabled>ANALYZE / RETRY</button><button class="mark-action" type="submit" name="operation" value="reanalyze" disabled>REANALYZE</button></div>
@@ -42,7 +42,7 @@
  @foreach (var article in Model.Articles)
  {
   <article class="article-row @(article["is_read"] == "0" ? "unread" : "")" data-article-id="@article["id"]">
-    <label class="article-select-marker"><input class="bulk-article-select" type="checkbox" name="SelectedIds" value="@article["id"]" form="bulk-articles-form" data-read-state="@article["is_read"]" data-ai-status="@article["ai_status"]" aria-label="Select @article["title"]"/><span class="article-marker" aria-hidden="true"></span></label><div class="article-content"><div class="article-meta"><span class="source-tag">@article["feed_title"]</span><span>·</span><span>@(DateTimeOffset.TryParse(article["published_utc"] ?? article["first_seen_utc"], out var date) ? date.ToLocalTime().ToString("dd MMM yyyy · HH:mm") : "Date unknown")</span><span class="pipeline-tag ai-@article["ai_status"]" title="@(article["ai_status"] == "failed" ? article["ai_error"] : null)" aria-label="@((article["ai_status"] == "failed" && !string.IsNullOrWhiteSpace(article["ai_error"])) ? $"Analysis failed: {article["ai_error"]}" : null)"><i></i> @((article["ai_status"] ?? "pending") switch { "analyzed" => "ANALYSIS COMPLETE", "analyzing" => "ANALYZING", "failed" => "ANALYSIS FAILED", _ => "AWAITING ANALYSIS" })</span>@if (article["ai_status"] == "analyzed") { <span class="category-pill category-@Model.CategoryClass(article["category"])" title="@Model.CategoryRationale(article["analysis_json"])">@ArticleCategories.Normalize(article["category"])</span> }</div>
+    <label class="article-select-marker"><input class="bulk-article-select" data-selection-item type="checkbox" name="SelectedIds" value="@article["id"]" form="bulk-articles-form" data-read-state="@article["is_read"]" data-ai-status="@article["ai_status"]" aria-label="Select @article["title"]"/><span class="article-marker" aria-hidden="true"></span></label><div class="article-content"><div class="article-meta"><span class="source-tag">@article["feed_title"]</span><span>·</span><span>@(DateTimeOffset.TryParse(article["published_utc"], out var date) ? date.ToLocalTime().ToString("dd MMM yyyy · HH:mm") : "Published date unavailable")</span><span class="pipeline-tag ai-@article["ai_status"]" title="@(article["ai_status"] == "failed" ? article["ai_error"] : null)" aria-label="@((article["ai_status"] == "failed" && !string.IsNullOrWhiteSpace(article["ai_error"])) ? $"Analysis failed: {article["ai_error"]}" : null)"><i></i> @((article["ai_status"] ?? "pending") switch { "analyzed" => "ANALYSIS COMPLETE", "analyzing" => "ANALYZING", "failed" => "ANALYSIS FAILED", _ => "AWAITING ANALYSIS" })</span>@if (article["ai_status"] == "analyzed") { <span class="category-pill category-@Model.CategoryClass(article["category"])" title="@Model.CategoryRationale(article["analysis_json"])">@ArticleCategories.Normalize(article["category"])</span> }</div>
       <h3><a href="@article["url"]" target="_blank" rel="noopener noreferrer">@article["title"] <span class="external">↗</span></a></h3><p class="article-summary">@System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(article["summary"] ?? "", "<[^>]+>", " "))</p>
       @if (article["ai_status"] == "failed") { <p class="analysis-error" title="@article["ai_error"]">Analysis did not finish. Retry when ready.</p> }
       <div class="article-actions"><form method="post" asp-page-handler="@(article["is_read"] == "0" ? "Read" : "Unread")"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><button class="mark-action" type="submit"><span aria-hidden="true">@(article["is_read"] == "0" ? "✓" : "↺")</span>@(article["is_read"] == "0" ? "MARK AS READ" : "MARK UNREAD")</button></form>
@@ -126,29 +126,19 @@
 (() => {
   const form = document.querySelector('[data-bulk-article-form]');
   if (!form) return;
-  const selectAll = form.querySelector('[data-select-visible]');
-  const rows = [...document.querySelectorAll('.bulk-article-select')];
-  const count = form.querySelector('[data-selection-count]');
   const buttons = [...form.querySelectorAll('button[name="operation"]')];
-  const refresh = () => {
-    const selected = rows.filter(box => box.checked).length;
-    count.textContent = `${selected} selected`;
-    const selectedRows = rows.filter(box => box.checked);
+  const refresh = selectedItems => {
     buttons.forEach(button => {
-      const eligible = selectedRows.some(box => {
+      const eligible = selectedItems.some(box => {
         const read = box.dataset.readState === '1';
         const status = box.dataset.aiStatus;
         return button.value === 'read' ? !read : button.value === 'unread' ? read : button.value === 'analyze' ? status === 'pending' || status === 'failed' : status === 'analyzed';
       });
       button.disabled = !eligible;
     });
-    selectAll.checked = rows.length > 0 && selected === rows.length;
-    selectAll.indeterminate = selected > 0 && selected < rows.length;
   };
-  selectAll.addEventListener('change', () => { rows.forEach(box => box.checked = selectAll.checked); refresh(); });
-  rows.forEach(box => box.addEventListener('change', refresh));
-  document.addEventListener('article-analysis-state-changed', refresh);
-  refresh();
+  form.addEventListener('bulk-selection-change', event => refresh(event.detail.selectedItems));
+  document.addEventListener('article-analysis-state-changed', () => refresh([...document.querySelectorAll('[data-selection-item][form="bulk-articles-form"]:checked')]));
 })();
 </script>
 <script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
