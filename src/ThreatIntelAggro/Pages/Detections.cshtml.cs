@@ -5,6 +5,11 @@ namespace ThreatIntelAggro.Pages;
 
 public sealed class DetectionsModel(AppDatabase database) : PageModel
 {
+    public static System.Text.Json.Nodes.JsonArray Behaviors(string? json)
+    {
+        try { return System.Text.Json.Nodes.JsonNode.Parse(json ?? "[]") as System.Text.Json.Nodes.JsonArray ?? []; }
+        catch (System.Text.Json.JsonException) { return []; }
+    }
     public IReadOnlyList<Dictionary<string, string?>> Items { get; private set; } = [];
     [BindProperty(SupportsGet = true)] public string State { get; set; } = "active";
     [BindProperty(SupportsGet = true)] public long? ArticleId { get; set; }
@@ -35,8 +40,17 @@ public sealed class DetectionsModel(AppDatabase database) : PageModel
     {
         var detection = database.Query("SELECT * FROM detections WHERE id=?", id).FirstOrDefault();
         if (detection is null) return NotFound();
-        var yaml = AnalysisService.ExportYaml(detection);
-        return File(System.Text.Encoding.UTF8.GetBytes(yaml), "application/yaml", $"threat-intel-aggro-{id}.yaml");
+        try
+        {
+            var yaml = AnalysisService.ExportYaml(detection);
+            return File(System.Text.Encoding.UTF8.GetBytes(yaml), "application/yaml", $"threat-intel-aggro-{id}.yaml");
+        }
+        catch (InvalidOperationException ex) { return new ObjectResult(ex.Message) { StatusCode = StatusCodes.Status422UnprocessableEntity }; }
+    }
+    public IActionResult OnGetKql(long id)
+    {
+        var detection = database.Query("SELECT kql FROM detections WHERE id=?", id).FirstOrDefault();
+        return detection is null ? NotFound() : File(System.Text.Encoding.UTF8.GetBytes(detection["kql"] ?? ""), "text/plain; charset=utf-8", $"threat-intel-aggro-{id}.kql");
     }
     public IActionResult OnGetJson(long id)
     {

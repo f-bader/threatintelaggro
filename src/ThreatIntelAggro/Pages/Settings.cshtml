@@ -47,7 +47,7 @@
 <button class="button button-primary" type="submit">SAVE LIFETIMES</button></form><p class="form-footnote">Defaults: IPs and URLs 90 days; domains, hashes, emails, software IDs, file and host artifacts 365 days; certificate thumbprints 730 days. Other types use 365 days. Set any value to 0 to disable expiry for that type. Changes affect current results and API responses immediately.</p></section>
 
 @section Scripts {
-<script>
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
   document.querySelector('[data-copy-target]')?.addEventListener('click', async event => {
     const button = event.currentTarget;
     const target = document.getElementById(button.dataset.copyTarget);

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 
 namespace ThreatIntelAggro.Pages;
 
@@ -14,6 +15,12 @@ public sealed class IocsModel(AppDatabase database) : PageModel
     public string[] Classifications { get; private set; } = [];
     public string ApiExampleUrl { get; private set; } = "/api/iocs?days=30";
     public IocExpiryDays ExpiryDays { get; private set; } = ExpirySettings.ReadDefaults();
+    public int TotalInRange { get; private set; }
+    public int ArchivedCount { get; private set; }
+    public int ExcludedCount { get; private set; }
+    public int ExpiredCount { get; private set; }
+    public int ContextCount { get; private set; }
+    public int PendingCount { get; private set; }
     [BindProperty(SupportsGet = true)] public int Days { get; set; } = 30;
     [BindProperty(SupportsGet = true)] public string? Vendor { get; set; }
     [BindProperty(SupportsGet = true)] public string? Industry { get; set; }
@@ -46,7 +53,14 @@ public sealed class IocsModel(AppDatabase database) : PageModel
         Classification = Classification is "suspicious" or "malicious" or "context" ? Classification : "all";
         ExpiryDays = ExpirySettings.Read(database);
         var archived = State == "archived";
-        var visible = IocIndex.Read(database, Days, archived: archived, includeUnapproved: true, includeNonActionable: true);
+        var all = IocIndex.Read(database, Days, includeUnapproved: true, includeNonActionable: true, includeFiltered: true);
+        TotalInRange = all.Count;
+        ArchivedCount = all.Count(x => x.Archived);
+        ExcludedCount = all.Count(x => x.Excluded);
+        ExpiredCount = all.Count(x => x.Expired);
+        ContextCount = all.Count(x => !IocIndex.IsActionableRole(x.Role));
+        PendingCount = all.Count(x => !x.Approved);
+        var visible = all.Where(x => !x.Excluded && !x.Expired && x.Archived == archived).ToArray();
         Classifications = new[] { "malicious", "suspicious", "context" }.Where(c => c == Classification || visible.Any(x => IocIndex.MatchesClassification(x.Role, c) && MatchesApproval(x) && Contains(x.Vendors, Vendor) && Contains(x.Industries, Industry) && Matches(x.Type, Type) && MatchesSearch(x, Search))).ToArray();
         Vendors = FacetValues(visible.Where(x => IocIndex.MatchesClassification(x.Role, Classification) && MatchesApproval(x) && Contains(x.Industries, Industry) && Matches(x.Type, Type) && MatchesSearch(x, Search)).SelectMany(x => x.Vendors));
         Industries = FacetValues(visible.Where(x => IocIndex.MatchesClassification(x.Role, Classification) && MatchesApproval(x) && Contains(x.Vendors, Vendor) && Matches(x.Type, Type) && MatchesSearch(x, Search)).SelectMany(x => x.Industries));
@@ -72,6 +86,39 @@ public sealed class IocsModel(AppDatabase database) : PageModel
     public IActionResult OnPostClassify(long articleId, string iocType, string iocValue, string? role)
     {
         if (!IocIndex.SetReviewedRole(database, articleId, iocType, iocValue, role)) return BadRequest("Invalid indicator or classification.");
+        return RedirectToPage(new { days = Days, vendor = Vendor, industry = Industry, type = Type, search = Search, state = State, approval = Approval, classification = Classification, includeUnapproved = IncludeUnapproved });
+    }
+
+    private sealed record BulkIndicator(long ArticleId, string Type, string Value);
+    public static string BulkToken(IocRecord record) => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new BulkIndicator(long.Parse(record.ArticleId, System.Globalization.CultureInfo.InvariantCulture), record.Type, record.Value)));
+
+    public IActionResult OnPostBulkClassify(string[]? selection, string? bulkRole)
+    {
+        if (selection is null || selection.Length is < 1 or > 200 || bulkRole is not ("malicious" or "suspicious")) return BadRequest("Select 1–200 indicators and a classification.");
+        var selected = new List<BulkIndicator>();
+        try
+        {
+            foreach (var token in selection)
+            {
+                if (token.Length > 4096) return BadRequest("Invalid selection.");
+                var item = JsonSerializer.Deserialize<BulkIndicator>(Convert.FromBase64String(token));
+                if (item is null || item.ArticleId <= 0 || string.IsNullOrWhiteSpace(item.Type) || string.IsNullOrWhiteSpace(item.Value)) return BadRequest("Invalid selection.");
+                selected.Add(item);
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException) { return BadRequest("Invalid selection."); }
+        try
+        {
+            database.Transaction(() =>
+            {
+                var current = IocIndex.Read(database, includeUnapproved: true, includeNonActionable: true)
+                    .Where(x => !IocIndex.IsActionableRole(x.Role)).Select(x => IocIndex.DismissalKey(x.ArticleId, x.Type, x.Value)).ToHashSet(StringComparer.Ordinal);
+                foreach (var item in selected)
+                    if (!current.Remove(IocIndex.DismissalKey(item.ArticleId.ToString(System.Globalization.CultureInfo.InvariantCulture), item.Type, item.Value)) || !IocIndex.SetReviewedRole(database, item.ArticleId, item.Type, item.Value, bulkRole))
+                        throw new InvalidOperationException("A selected indicator is no longer available for review.");
+            });
+        }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         return RedirectToPage(new { days = Days, vendor = Vendor, industry = Industry, type = Type, search = Search, state = State, approval = Approval, classification = Classification, includeUnapproved = IncludeUnapproved });
     }
 

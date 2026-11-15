@@ -10,7 +10,7 @@ public static class ArticleEvidenceValidator
     {
         var root = JsonNode.Parse(json) ?? throw new InvalidOperationException("Article output is empty.");
         CheckSchema(root, schema, "article");
-        if (root["schema_version"]!.GetValue<string>() != "1.0") Fail("Unsupported article schema version.");
+        if (root["schema_version"]!.GetValue<string>() != "1.1") Fail("Unsupported article schema version.");
         var ledger = sources.ToDictionary(x => x!["source_id"]!.GetValue<string>(), x => x!, StringComparer.Ordinal);
         foreach (var reference in root["references"]!.AsArray())
         {
@@ -19,6 +19,14 @@ public static class ArticleEvidenceValidator
             foreach (var property in new[] { "url", "title", "kind", "inspection_status" })
                 if (reference[property]!.GetValue<string>() != source![property]!.GetValue<string>()) Fail("Reference metadata does not match the source ledger.");
         }
+        ValidateEvidence(root["summary"]!["evidence"]!.AsArray(), ledger, true);
+        foreach (var finding in root["summary"]!["key_findings"]!.AsArray())
+        {
+            CheckAssessment(finding!);
+            if (string.IsNullOrWhiteSpace(finding!["text"]!.GetValue<string>())) Fail("A key finding cannot be empty.");
+            ValidateEvidence(finding["evidence"]!.AsArray(), ledger, true);
+        }
+        ValidateEvidence(root["detection_assessment"]!["evidence"]!.AsArray(), ledger, root["detection_assessment"]!["potential"]!.GetValue<string>() == "sufficient");
         foreach (var item in root["iocs"]!.AsArray())
         {
             var ioc = item!;
@@ -28,6 +36,7 @@ public static class ArticleEvidenceValidator
             if (string.IsNullOrWhiteSpace(value) || value.Length > 2048 || string.IsNullOrWhiteSpace(ioc["context"]!.GetValue<string>())) Fail("IOC value and context are required.");
             if (ioc["role"]!.GetValue<string>() is not ("malicious" or "suspicious" or "benign_context" or "unknown")) Fail("Invalid IOC role.");
             CheckAssessment(ioc);
+            if (!IndicatorNormalization.Matches(type, value, ioc["normalized_value"]?.GetValue<string>())) Fail("Normalized IOC does not match its original value.");
             CheckIndicator(type, normalized);
             var evidence = ioc["evidence"]!.AsArray();
             if (evidence.Count == 0) Fail("IOC evidence is required.");
@@ -39,7 +48,7 @@ public static class ArticleEvidenceValidator
                 if (!ledger.TryGetValue(id, out var source) || source!["inspection_status"]!.GetValue<string>() != "fetched") Fail("IOC cites an unknown or unfetched source.");
                 var content = source!["content"]!.GetValue<string>();
                 if (string.IsNullOrWhiteSpace(entry["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !content.Contains(excerpt, StringComparison.Ordinal)) Fail("IOC excerpt does not match the fetched source.");
-                if (excerpt.Contains(value, StringComparison.OrdinalIgnoreCase) || excerpt.Contains(normalized, StringComparison.OrdinalIgnoreCase)) valueFound = true;
+                if (excerpt.Contains(value, StringComparison.OrdinalIgnoreCase)) valueFound = true;
             }
             if (!valueFound) Fail("IOC value is absent from its cited sources.");
         }
@@ -49,11 +58,7 @@ public static class ArticleEvidenceValidator
                 CheckAssessment(mapping!);
                 var evidence = mapping!["evidence"]!.AsArray();
                 if (evidence.Count == 0) Fail("Mapping evidence is required.");
-                foreach (var item in evidence)
-                {
-                    var excerpt = item!.GetValue<string>();
-                    if (string.IsNullOrWhiteSpace(excerpt) || !ledger.Values.Any(source => source["inspection_status"]!.GetValue<string>() == "fetched" && source["content"]!.GetValue<string>().Contains(excerpt, StringComparison.Ordinal))) Fail("Mapping evidence does not match a fetched source.");
-                }
+                ValidateEvidence(evidence, ledger, true);
             }
     }
 
@@ -61,24 +66,49 @@ public static class ArticleEvidenceValidator
     {
         var root = JsonNode.Parse(json) ?? throw new InvalidOperationException("Detection output is empty.");
         CheckSchema(root, schema, "detection");
-        if (root["schema_version"]!.GetValue<string>() != "1.0") Fail("Unsupported detection schema version.");
+        if (root["schema_version"]!.GetValue<string>() != "1.1") Fail("Unsupported detection schema version.");
+        var ledger = sources.ToDictionary(x => x!["source_id"]!.GetValue<string>(), x => x!, StringComparer.Ordinal);
         var detections = root["detections"]!.AsArray();
-        if (root["outcome"]!.GetValue<string>() == "drafts_generated" && detections.Count == 0) Fail("Detection output contains no drafts.");
+        var outcome = root["outcome"]!.GetValue<string>();
+        if ((outcome == "drafts_generated" && detections.Count is < 1 or > 3) || (outcome == "no_supported_detection" && detections.Count != 0)) Fail("Detection outcome and draft count disagree.");
+        var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var detection in detections)
         {
+            var key = detection!["local_key"]!.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(key) || !keys.Add(key) || string.IsNullOrWhiteSpace(detection["alert_title"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(detection["kql"]!.GetValue<string>())) Fail("Detection keys, titles and queries must be present, and keys must be unique.");
             if (detection!["severity"]!.GetValue<string>() is not ("informational" or "low" or "medium" or "high")) Fail("Invalid detection severity.");
+            var cited = new HashSet<string>(StringComparer.Ordinal);
+            var behaviors = detection["behaviors"]!.AsArray();
+            if (behaviors.Count == 0) Fail("Detection behavior evidence is required.");
+            foreach (var behavior in behaviors)
+            {
+                CheckAssessment(behavior!);
+                if (string.IsNullOrWhiteSpace(behavior!["description"]!.GetValue<string>())) Fail("Detection behavior cannot be empty.");
+                cited.UnionWith(ValidateEvidence(behavior["evidence"]!.AsArray(), ledger, true));
+            }
             foreach (var mapping in detection["mitre_mappings"]!.AsArray())
             {
                 CheckAssessment(mapping!);
-                var evidence = mapping!["evidence"]!.AsArray();
-                if (evidence.Count == 0) Fail("Detection mapping evidence is required.");
-                foreach (var item in evidence)
-                {
-                    var excerpt = item!.GetValue<string>();
-                    if (string.IsNullOrWhiteSpace(excerpt) || !sources.Any(source => source!["inspection_status"]!.GetValue<string>() == "fetched" && source["content"]!.GetValue<string>().Contains(excerpt, StringComparison.Ordinal))) Fail("Detection mapping evidence does not match a fetched source.");
-                }
+                cited.UnionWith(ValidateEvidence(mapping!["evidence"]!.AsArray(), ledger, true));
             }
+            var declared = detection["source_ids"]!.AsArray().Select(x => x!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
+            if (declared.Count == 0 || declared.Any(id => !ledger.TryGetValue(id, out var source) || source["inspection_status"]!.GetValue<string>() != "fetched") || !cited.IsSubsetOf(declared)) Fail("Detection source IDs do not match fetched evidence.");
         }
+    }
+
+    private static HashSet<string> ValidateEvidence(JsonArray evidence, Dictionary<string, JsonNode> ledger, bool required)
+    {
+        if (required && evidence.Count == 0) Fail("Evidence is required.");
+        var cited = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in evidence)
+        {
+            var id = item!["source_id"]!.GetValue<string>();
+            var excerpt = item["excerpt"]!.GetValue<string>();
+            if (!ledger.TryGetValue(id, out var source) || source["inspection_status"]!.GetValue<string>() != "fetched") Fail("Evidence cites an unknown or unfetched source.");
+            if (string.IsNullOrWhiteSpace(item["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !source!["content"]!.GetValue<string>().Contains(excerpt, StringComparison.Ordinal)) Fail("Evidence excerpt does not match its fetched source.");
+            cited.Add(id);
+        }
+        return cited;
     }
 
     private static void CheckAssessment(JsonNode item)

@@ -113,6 +113,56 @@ public sealed class MediumFindingsTests
     }
 
     [Fact]
+    public void BulkReviewIsExplicitAndAtomicAndKeepsApproval()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,analysis_json) VALUES(?,?,?,?,?,?)", "Fixture", "Fixture", "https://example.org", "", now, """{"iocs":[{"type":"domain","value":"one.example","role":"unknown"},{"type":"domain","value":"two.example","role":"unknown"}]}""");
+        IocIndex.Approve(db, 1, "domain", "one.example");
+        var page = new IocsModel(db);
+        page.OnGet();
+        Assert.Equal(2, page.ContextCount);
+        Assert.Equal(1, page.PendingCount);
+        var tokens = page.Records.Select(IocsModel.BulkToken).ToArray();
+        Assert.IsType<BadRequestObjectResult>(page.OnPostBulkClassify([tokens[0], tokens[0]], "suspicious"));
+        Assert.Equal(0, db.ScalarInt("SELECT COUNT(*) FROM ioc_role_overrides"));
+        Assert.IsType<BadRequestObjectResult>(page.OnPostBulkClassify(tokens, "unknown"));
+        Assert.IsType<RedirectToPageResult>(page.OnPostBulkClassify(tokens, "suspicious"));
+        Assert.Equal("one.example", Assert.Single(IocIndex.Read(db)).Value);
+        Assert.Equal(2, IocIndex.Read(db, includeUnapproved: true).Count);
+    }
+
+    [Fact]
+    public void ReviewCountsIncludeHiddenReasonsAndCacheRefreshesAfterApproval()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,analysis_json) VALUES(?,?,?,?,?,?)", "Fixture", "Fixture", "https://example.org", "", now, """{"iocs":[{"type":"domain","value":"one.example","role":"malicious"},{"type":"domain","value":"two.example","role":"unknown"}]}""");
+        db.Execute("INSERT INTO ioc_dismissals(article_id,ioc_type,ioc_value,dismissed_utc) VALUES(1,'domain','two.example',?)", now);
+        var page = new IocsModel(db);
+        page.OnGet();
+        Assert.Equal(2, page.TotalInRange);
+        Assert.Equal(1, page.ArchivedCount);
+        Assert.Single(page.Records);
+        var cache = new IocCountCache(db);
+        Assert.Equal(0, cache.GetCount());
+        IocIndex.Approve(db, 1, "domain", "one.example");
+        Assert.Equal(1, cache.GetCount());
+    }
+
+    [Fact]
+    public void OlderMismatchedNormalizedValueIsNeverReturned()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,analysis_json) VALUES(?,?,?,?,?,?)", "Fixture", "Fixture", "https://example.org", "", DateTimeOffset.UtcNow.ToString("O"), """{"iocs":[{"type":"domain","value":"real.example","normalized_value":"unrelated.example","role":"malicious"}]}""");
+        IocIndex.Approve(db, 1, "domain", "real.example");
+        Assert.Null(Assert.Single(IocIndex.Read(db)).NormalizedValue);
+    }
+
+    [Fact]
     public void ClassificationFilterUsesEffectiveRoleAcrossPageCsvAndApi()
     {
         using var fixture = DatabaseFixture.Create();
@@ -179,6 +229,68 @@ public sealed class MediumFindingsTests
         Assert.Equal("original", IocExclusionSettings.Get(db, "fixture"));
     }
 
+    [Fact]
+    public void OnlineBackupRestoresCommittedWalDataAndKeysAndRejectsTampering()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var directory = fixture.DirectoryPath;
+        var keyDirectory = Path.Combine(directory, "keys");
+        Directory.CreateDirectory(keyDirectory);
+        File.WriteAllText(Path.Combine(keyDirectory, "key-fixture.xml"), "<key>fixture</key>");
+        db.Execute("INSERT INTO app_settings(key,value) VALUES('backup-fixture','before')");
+        var env = WebApplication.CreateBuilder(new WebApplicationOptions { ContentRootPath = directory }).Environment;
+        var prior = Environment.GetEnvironmentVariable("AGGRO_DATA_DIR");
+        BackupManager manager;
+        try { Environment.SetEnvironmentVariable("AGGRO_DATA_DIR", directory); manager = new BackupManager(db, env); }
+        finally { Environment.SetEnvironmentVariable("AGGRO_DATA_DIR", prior); }
+        var backup = manager.CreateBackup();
+        db.Execute("UPDATE app_settings SET value='after' WHERE key='backup-fixture'");
+        var restored = Path.Combine(directory, "restored");
+        BackupManager.RestoreToNewDirectory(backup, restored);
+        Assert.Equal("<key>fixture</key>", File.ReadAllText(Path.Combine(restored, "keys", "key-fixture.xml")));
+        AppDatabase restoredDb;
+        try { Environment.SetEnvironmentVariable("AGGRO_DATA_DIR", restored); restoredDb = new AppDatabase(env); }
+        finally { Environment.SetEnvironmentVariable("AGGRO_DATA_DIR", prior); }
+        using (restoredDb) Assert.Equal("before", IocExclusionSettings.Get(restoredDb, "backup-fixture"));
+        Assert.Throws<InvalidOperationException>(() => BackupManager.RestoreToNewDirectory(backup, restored));
+        File.AppendAllText(Path.Combine(backup, "aggro.db"), "tampered");
+        Assert.Throws<InvalidOperationException>(() => BackupManager.RestoreToNewDirectory(backup, Path.Combine(directory, "bad-restore")));
+        Assert.False(Directory.Exists(Path.Combine(directory, "bad-restore")));
+    }
+
+    [Fact]
+    public void BackupRetentionKeepsDailyAndWeeklySnapshotsAndIgnoresOtherFolders()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var env = WebApplication.CreateBuilder(new WebApplicationOptions { ContentRootPath = fixture.DirectoryPath }).Environment;
+        var prior = Environment.GetEnvironmentVariable("AGGRO_DATA_DIR");
+        BackupManager manager;
+        try { Environment.SetEnvironmentVariable("AGGRO_DATA_DIR", fixture.DirectoryPath); manager = new BackupManager(fixture.Database, env); }
+        finally { Environment.SetEnvironmentVariable("AGGRO_DATA_DIR", prior); }
+        var now = DateTimeOffset.UtcNow;
+        Directory.CreateDirectory(manager.BackupDirectory);
+        for (var day = 0; day < 60; day++)
+        {
+            var created = now.AddDays(-day);
+            var path = Path.Combine(manager.BackupDirectory, $"aggro-{created:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "manifest.json"), JsonSerializer.Serialize(new BackupManifest("ThreatIntelAggro", 1, created, [])));
+        }
+        var unrelated = Path.Combine(manager.BackupDirectory, "aggro-manual");
+        Directory.CreateDirectory(unrelated);
+        manager.Prune(now);
+        Assert.Equal(11, Directory.EnumerateDirectories(manager.BackupDirectory, "aggro-*").Count(path => path != unrelated));
+        Assert.True(Directory.Exists(unrelated));
+    }
+
+    [Fact]
+    public void SqliteQueryReportsRuntimeStepErrors()
+    {
+        using var fixture = DatabaseFixture.Create();
+        Assert.Throws<InvalidOperationException>(() => fixture.Database.Query("SELECT abs(-9223372036854775808)"));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -192,11 +304,11 @@ public sealed class MediumFindingsTests
         db.Execute("INSERT INTO source_snapshots(article_id,source_id,content) VALUES(1,'old','original')");
         db.Execute("INSERT INTO detections(article_id,local_key,alert_title,kql,status,archived,guid,created_utc,updated_utc) VALUES(1,'existing','Reviewed title','Old query','accepted',0,'old-guid',?,?)", now, now);
         var schemaArticle = """
-        {"schema_version":"1.0","language":"en","category":"Existing Research","category_rationale":"fixture","summary":{"headline":"fixture","overview":"fixture","key_findings":[]},"iocs":[],"references":[{"source_id":"src_article","url":"https://example.org/","title":"Fixture","kind":"original","inspection_status":"fetched","relevance":"original"}],"mitre_mappings":[],"industries":[],"threat_actors":[],"vendors":[],"products":[],"malware":[],"campaigns":[],"vulnerabilities":[],"targeted_countries":[],"detection_assessment":{"potential":"uncertain","reason":"fixture","evidence":[]},"coverage":{"limitations":[],"uninspected_source_ids":[],"conflicting_claims":[]}}
+        {"schema_version":"1.1","language":"en","category":"Existing Research","category_rationale":"fixture","summary":{"headline":"fixture","overview":"fixture","key_findings":[],"evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"Fixture article"}]},"iocs":[],"references":[{"source_id":"src_article","url":"https://example.org/","title":"Fixture","kind":"original","inspection_status":"fetched","relevance":"original"}],"mitre_mappings":[],"industries":[],"threat_actors":[],"vendors":[],"products":[],"malware":[],"campaigns":[],"vulnerabilities":[],"targeted_countries":[],"detection_assessment":{"potential":"uncertain","reason":"fixture","evidence":[]},"coverage":{"limitations":[],"uninspected_source_ids":[],"conflicting_claims":[]}}
         """;
-        object Draft(string key) => new { local_key = key, alert_title = "Generated", description = "description", severity = "medium", rationale = "reason", kql = "DeviceEvents | take 1", tactic = "", techniques = Array.Empty<string>(), playbook = new { title = "test", triage_steps = Array.Empty<string>(), investigation_steps = Array.Empty<string>(), response_options = Array.Empty<string>() }, mitre_mappings = Array.Empty<object>(), telemetry = new { tables = Array.Empty<string>(), required_columns = Array.Empty<string>(), assumptions = Array.Empty<string>(), known_gaps = Array.Empty<string>() } };
+        object Draft(string key) => new { local_key = key, alert_title = "Generated", description = "description", severity = "medium", rationale = "reason", kql = "DeviceEvents | take 1", tactic = "", techniques = Array.Empty<string>(), behaviors = new[] { new { description = "fixture behavior", basis = "source_reported", confidence = "high", evidence = new[] { new { source_id = "src_article", locator = "paragraph 1", excerpt = "Fixture article" } } } }, source_ids = new[] { "src_article" }, playbook = new { title = "test", triage_steps = Array.Empty<string>(), investigation_steps = Array.Empty<string>(), response_options = Array.Empty<string>() }, mitre_mappings = Array.Empty<object>(), telemetry = new { tables = Array.Empty<string>(), required_columns = Array.Empty<string>(), assumptions = Array.Empty<string>(), known_gaps = Array.Empty<string>() } };
         var drafts = new[] { Draft("existing"), Draft(duplicateKey ? "existing" : "new") };
-        var detectionJson = JsonSerializer.Serialize(new { schema_version = "1.0", outcome = "drafts_generated", reason = "test", detections = drafts, coverage = Array.Empty<string>() });
+        var detectionJson = JsonSerializer.Serialize(new { schema_version = "1.1", outcome = "drafts_generated", reason = "test", detections = drafts, coverage = Array.Empty<string>() });
         var stages = new Queue<string>(["{\"related_sources\":[]}", schemaArticle, detectionJson]);
         using var http = new HttpClient(new AnalysisHandler(stages));
         using var fetcher = new SafePublicFetcher(new AnalysisHandler(new Queue<string>()));
@@ -241,6 +353,7 @@ public sealed class MediumFindingsTests
     private sealed class DatabaseFixture(string directory, AppDatabase database) : IDisposable
     {
         public AppDatabase Database => database;
+        public string DirectoryPath => directory;
         public static DatabaseFixture Create()
         {
             var path = Path.Combine(Path.GetTempPath(), "AggroMediumTests", Guid.NewGuid().ToString("N"));

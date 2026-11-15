@@ -1,9 +1,10 @@
 @inject ThreatIntelAggro.AppDatabase Database
+@inject ThreatIntelAggro.IocCountCache IocCountCache
 @{
     var unreadCount = Database.ScalarInt("SELECT COUNT(*) FROM articles WHERE is_read=0");
     var draftCount = Database.ScalarInt("SELECT COUNT(*) FROM detections WHERE archived=0");
     var feedCount = Database.ScalarInt("SELECT COUNT(*) FROM feeds");
-    var iocCount = ThreatIntelAggro.IocIndex.Read(Database).Count;
+    var iocCount = IocCountCache.GetCount();
 }
 <!DOCTYPE html>
 <html lang="en">
@@ -36,7 +37,14 @@
     <div class="console-content">@RenderBody()</div>
   </main>
 </div>
-<script>
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
+  document.addEventListener('change', event => {
+    if (event.target.matches('[data-auto-submit]')) event.target.form?.requestSubmit();
+  });
+  document.addEventListener('submit', event => {
+    const message = event.target.dataset.confirm;
+    if (message && !window.confirm(message)) event.preventDefault();
+  });
   const clock = document.getElementById('local-clock');
   const tick = () => { if (clock) clock.textContent = new Intl.DateTimeFormat(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date()); };
   tick(); setInterval(tick, 1000);

@@ -3,6 +3,14 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using System.Net;
 
+if (args.Length > 0 && args[0] == "--restore-backup")
+{
+    if (args.Length != 3) { Console.Error.WriteLine("Usage: --restore-backup <backup-directory> <new-destination-directory>"); Environment.ExitCode = 2; return; }
+    try { BackupManager.RestoreToNewDirectory(args[1], args[2]); Console.WriteLine("Backup verified and restored to the new directory."); }
+    catch (Exception ex) { Console.Error.WriteLine($"Restore failed: {ex.Message}"); Environment.ExitCode = 1; }
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 if (builder.Environment.IsDevelopment()) builder.Configuration.AddUserSecrets<Program>(optional: true);
 builder.Services.AddRazorPages();
@@ -13,6 +21,9 @@ var dataDirectory = Environment.GetEnvironmentVariable("AGGRO_DATA_DIR") ?? Path
 Directory.CreateDirectory(Path.Combine(dataDirectory, "keys"));
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDirectory, "keys")));
 builder.Services.AddSingleton<AppDatabase>();
+builder.Services.AddSingleton<IocCountCache>();
+builder.Services.AddSingleton<BackupManager>();
+builder.Services.AddHostedService<BackupWorker>();
 builder.Services.AddSingleton<SafePublicFetcher>();
 builder.Services.AddTransient<FeedReader>();
 builder.Services.AddHttpClient<AnalysisService>(client =>
@@ -38,6 +49,15 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+app.Use(async (context, next) =>
+{
+    var nonce = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(18));
+    context.Items["CspNonce"] = nonce;
+    context.Response.Headers.ContentSecurityPolicy = $"default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+    context.Response.Headers.XContentTypeOptions = "nosniff";
+    context.Response.Headers["Referrer-Policy"] = "same-origin";
+    await next();
+});
 app.UseStaticFiles();
 app.UseRouting();
 app.Use(async (context, next) =>

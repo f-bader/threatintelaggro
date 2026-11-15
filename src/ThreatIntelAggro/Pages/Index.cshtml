@@ -65,6 +65,9 @@
         var relatedReadCount = relatedSources.Count(x => x.Status.Equals("fetched", StringComparison.OrdinalIgnoreCase));
         var relatedCitedCount = relatedSources.Count(x => x.Cited);
       }<h4>@root.GetProperty("summary").GetProperty("headline").GetString()</h4><p>@root.GetProperty("summary").GetProperty("overview").GetString()</p>
+      @{ var summary = root.GetProperty("summary"); }
+      @if (summary.TryGetProperty("evidence", out var summaryEvidence) && summaryEvidence.ValueKind == System.Text.Json.JsonValueKind.Array && summaryEvidence.GetArrayLength() > 0) { <details class="query-details evidence-details"><summary>SUMMARY EVIDENCE</summary>@foreach (var citation in summaryEvidence.EnumerateArray()) { <div class="evidence-item"><blockquote>@citation.GetProperty("excerpt").GetString()</blockquote><small>Source @citation.GetProperty("source_id").GetString() · @citation.GetProperty("locator").GetString()</small></div> }</details> }
+      @if (summary.TryGetProperty("key_findings", out var findings) && findings.ValueKind == System.Text.Json.JsonValueKind.Array && findings.GetArrayLength() > 0) { <details class="query-details evidence-details"><summary>KEY FINDINGS</summary>@foreach (var finding in findings.EnumerateArray()) { if (finding.ValueKind == System.Text.Json.JsonValueKind.String) { <p>@finding.GetString()</p> } else if (finding.ValueKind == System.Text.Json.JsonValueKind.Object) { <div class="evidence-item"><p><strong>@finding.GetProperty("text").GetString()</strong> · @finding.GetProperty("basis").GetString() · @finding.GetProperty("confidence").GetString() confidence</p>@if (finding.TryGetProperty("evidence", out var evidence) && evidence.ValueKind == System.Text.Json.JsonValueKind.Array) { @foreach (var citation in evidence.EnumerateArray()) { <blockquote>@citation.GetProperty("excerpt").GetString()</blockquote><small>Source @citation.GetProperty("source_id").GetString() · @citation.GetProperty("locator").GetString()</small> } }</div> } }</details> }
       <section class="source-coverage" aria-label="Related source coverage"><div class="source-coverage-head"><div><span class="eyebrow">RESEARCH COVERAGE</span><strong>@relatedReadCount related source@(relatedReadCount == 1 ? "" : "s") read</strong></div><span class="source-cited-count">@relatedCitedCount cited in findings</span></div>
         @if (relatedSources.Count > 0) { <ul class="source-ledger">@foreach (var source in relatedSources) { <li class="@(source.Cited ? "source-cited" : "")"><span class="source-ledger-status @(source.Cited ? "is-cited" : source.Status == "fetched" ? "is-read" : "is-unread")">@(source.Cited ? "CITED" : source.Status == "fetched" ? "READ" : source.Status.ToUpperInvariant())</span><div><a href="@source.Url" target="_blank" rel="noopener noreferrer">@source.Title <span class="external">↗</span></a><small>@source.Kind · @source.Id</small></div></li> }</ul> }
       </section><div class="analysis-grid">
@@ -81,7 +84,7 @@
  </div>
  <div class="list-foot"><span>Showing @Model.Articles.Count most recent matching articles</span><span>⟳ &nbsp;Feed checks run in the background</span></div>
 </section>
-<script>
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
 (() => {
   const form = document.querySelector('#article-filter-form');
   if (!form) return;
@@ -106,7 +109,7 @@
   });
 })();
 </script>
-<script>
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
 (() => {
   const states = { pending: 'AWAITING ANALYSIS', analyzing: 'ANALYZING', analyzed: 'ANALYSIS COMPLETE', failed: 'ANALYSIS FAILED' };
   async function updateAnalysisStates() {

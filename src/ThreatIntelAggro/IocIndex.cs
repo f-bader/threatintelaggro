@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ThreatIntelAggro;
 
@@ -6,12 +7,13 @@ public sealed record IocRecord(
     string Type, string Value, string? NormalizedValue, string Role, string Context,
     string Confidence, string Basis, string ArticleId, string ArticleTitle,
     string ArticleUrl, string ArticleDate, string[] Vendors, string[] Industries,
-    string[] Mitre, bool Approved, DateTimeOffset? ExpiresUtc, string? OriginalRole = null);
+    string[] Mitre, bool Approved, DateTimeOffset? ExpiresUtc, string? OriginalRole = null,
+    [property: JsonIgnore] bool Archived = false, [property: JsonIgnore] bool Excluded = false, [property: JsonIgnore] bool Expired = false);
 
 public static class IocIndex
 {
     public static IReadOnlyList<IocRecord> Read(AppDatabase database, int? days = null,
-        string? vendor = null, string? industry = null, string? type = null, string? search = null, bool archived = false, bool includeUnapproved = false, bool includeNonActionable = false, string? classification = null)
+        string? vendor = null, string? industry = null, string? type = null, string? search = null, bool archived = false, bool includeUnapproved = false, bool includeNonActionable = false, string? classification = null, bool includeFiltered = false)
     {
         var args = new List<object?>();
         var dateFilter = "";
@@ -48,8 +50,10 @@ public static class IocIndex
                     var value = Text(ioc, "value");
                     if (string.IsNullOrWhiteSpace(value)) continue;
                     var normalizedValue = NullableText(ioc, "normalized_value");
-                    if (exclusions.Excludes(Text(ioc, "type"), value, normalizedValue)) continue;
-                    if (dismissed.Contains(DismissalKey(article["id"]!, Text(ioc, "type"), value)) != archived) continue;
+                    if (!IndicatorNormalization.Matches(Text(ioc, "type"), value, normalizedValue)) normalizedValue = null;
+                    var isExcluded = exclusions.Excludes(Text(ioc, "type"), value, normalizedValue);
+                    var isArchived = dismissed.Contains(DismissalKey(article["id"]!, Text(ioc, "type"), value));
+                    if (!includeFiltered && (isExcluded || isArchived != archived)) continue;
                     var typeName = Text(ioc, "type");
                     var key = DismissalKey(article["id"]!, typeName, value);
                     var originalRole = Text(ioc, "role");
@@ -61,8 +65,9 @@ public static class IocIndex
                     var articleDate = article["published_utc"] ?? article["first_seen_utc"] ?? "";
                     var expiryDays = ExpirySettings.ForType(typeName, approvalDays);
                     DateTimeOffset? expiresUtc = DateTimeOffset.TryParse(articleDate, out var observed) && expiryDays > 0 ? observed.AddDays(expiryDays) : null;
-                    if (expiresUtc is not null && expiresUtc <= DateTimeOffset.UtcNow) continue;
-                    var record = new IocRecord(typeName, value, normalizedValue, effectiveRole, Text(ioc, "context"), Text(ioc, "confidence"), Text(ioc, "basis"), article["id"]!, article["title"] ?? "", article["url"] ?? "", articleDate, vendors, industries, mitre, isApproved, expiresUtc, overridden ? originalRole : null);
+                    var isExpired = expiresUtc is not null && expiresUtc <= DateTimeOffset.UtcNow;
+                    if (!includeFiltered && isExpired) continue;
+                    var record = new IocRecord(typeName, value, normalizedValue, effectiveRole, Text(ioc, "context"), Text(ioc, "confidence"), Text(ioc, "basis"), article["id"]!, article["title"] ?? "", article["url"] ?? "", articleDate, vendors, industries, mitre, isApproved, expiresUtc, overridden ? originalRole : null, isArchived, isExcluded, isExpired);
                     if (!Contains(vendors, vendor) || !Contains(industries, industry) || (!string.IsNullOrWhiteSpace(type) && !record.Type.Equals(type, StringComparison.OrdinalIgnoreCase))) continue;
                     if (!string.IsNullOrWhiteSpace(search) && !string.Join(' ', record.Type, record.Value, record.NormalizedValue, record.Role, record.Context, record.ArticleTitle, string.Join(' ', vendors), string.Join(' ', industries), string.Join(' ', mitre)).Contains(search, StringComparison.OrdinalIgnoreCase)) continue;
                     records.Add(record);
@@ -137,7 +142,14 @@ public static class IocIndex
         var exclusions = IocExclusionMatcher.Load(database);
         var dismissed = string.IsNullOrWhiteSpace(articleId) ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : database.Query("SELECT ioc_type,ioc_value FROM ioc_dismissals WHERE article_id=?", articleId).Select(row => DismissalKey(articleId, row["ioc_type"] ?? "", row["ioc_value"] ?? "")).ToHashSet(StringComparer.OrdinalIgnoreCase);
         return iocs.EnumerateArray()
-            .Where(ioc => !exclusions.Excludes(Text(ioc, "type"), Text(ioc, "value"), NullableText(ioc, "normalized_value")) && !dismissed.Contains(DismissalKey(articleId ?? "", Text(ioc, "type"), Text(ioc, "value"))))
+            .Where(ioc =>
+            {
+                var type = Text(ioc, "type");
+                var value = Text(ioc, "value");
+                var normalized = NullableText(ioc, "normalized_value");
+                if (!IndicatorNormalization.Matches(type, value, normalized)) normalized = null;
+                return !exclusions.Excludes(type, value, normalized) && !dismissed.Contains(DismissalKey(articleId ?? "", type, value));
+            })
             .Select(ioc => Text(ioc, "value"))
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase)

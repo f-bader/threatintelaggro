@@ -7,6 +7,8 @@ public sealed class AppDatabase : IDisposable
 {
     private readonly string _path;
     private readonly object _gate = new();
+    private long _changeVersion;
+    public long ChangeVersion => Interlocked.Read(ref _changeVersion);
 
     public AppDatabase(IWebHostEnvironment environment)
     {
@@ -53,7 +55,7 @@ public sealed class AppDatabase : IDisposable
                     id INTEGER PRIMARY KEY AUTOINCREMENT, article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
                     local_key TEXT NOT NULL, alert_title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', severity TEXT NOT NULL DEFAULT 'medium',
                     rationale TEXT NOT NULL DEFAULT '', kql TEXT NOT NULL, yaml TEXT NOT NULL DEFAULT '', playbook_json TEXT NOT NULL DEFAULT '{}',
-                    mitre_json TEXT NOT NULL DEFAULT '[]', telemetry_json TEXT NOT NULL DEFAULT '{}', references_json TEXT NOT NULL DEFAULT '[]',
+                    mitre_json TEXT NOT NULL DEFAULT '[]', telemetry_json TEXT NOT NULL DEFAULT '{}', references_json TEXT NOT NULL DEFAULT '[]', behaviors_json TEXT NOT NULL DEFAULT '[]', source_ids_json TEXT NOT NULL DEFAULT '[]', xdr_tactic TEXT NOT NULL DEFAULT '', xdr_techniques_json TEXT NOT NULL DEFAULT '[]',
                     status TEXT NOT NULL DEFAULT 'new', archived INTEGER NOT NULL DEFAULT 0, validation_state TEXT NOT NULL DEFAULT 'pending',
                     validation_json TEXT NOT NULL DEFAULT '{}', guid TEXT NOT NULL, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL,
                     UNIQUE(article_id,local_key)
@@ -82,6 +84,8 @@ public sealed class AppDatabase : IDisposable
                 "ALTER TABLE articles ADD COLUMN category TEXT NOT NULL DEFAULT 'Existing Research'",
                 "ALTER TABLE articles ADD COLUMN category_manual INTEGER NOT NULL DEFAULT 0"
             }) { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
+            foreach (var migration in new[] { "ALTER TABLE detections ADD COLUMN xdr_tactic TEXT NOT NULL DEFAULT ''", "ALTER TABLE detections ADD COLUMN xdr_techniques_json TEXT NOT NULL DEFAULT '[]'", "ALTER TABLE detections ADD COLUMN behaviors_json TEXT NOT NULL DEFAULT '[]'", "ALTER TABLE detections ADD COLUMN source_ids_json TEXT NOT NULL DEFAULT '[]'" })
+            { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
             try { Exec("ALTER TABLE detections ADD COLUMN guid TEXT NOT NULL DEFAULT ''"); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { }
             Exec("UPDATE detections SET guid=lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-a' || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))) WHERE guid=''");
             Exec("UPDATE articles SET ai_status='pending',ai_error=NULL WHERE ai_status='analyzing'");
@@ -105,7 +109,8 @@ public sealed class AppDatabase : IDisposable
             WithStatement(sql, args, statement =>
             {
                 var columns = Native.sqlite3_column_count(statement);
-                while (Native.sqlite3_step(statement) == 100)
+                int status;
+                while ((status = Native.sqlite3_step(statement)) == 100)
                 {
                     var row = new Dictionary<string, string?>();
                     for (var index = 0; index < columns; index++)
@@ -116,6 +121,7 @@ public sealed class AppDatabase : IDisposable
                     }
                     rows.Add(row);
                 }
+                if (status != 101) throw Error(status);
             });
             return rows;
         }
@@ -131,6 +137,7 @@ public sealed class AppDatabase : IDisposable
                 var status = Native.sqlite3_step(statement);
                 if (status != 101) throw Error(status);
                 changed = Native.sqlite3_changes(_handle);
+                if (changed != 0) Interlocked.Increment(ref _changeVersion);
             });
             return changed;
         }
@@ -144,6 +151,60 @@ public sealed class AppDatabase : IDisposable
             try { action(); Exec("COMMIT"); }
             catch { Exec("ROLLBACK"); throw; }
         }
+    }
+
+    public void BackupTo(string destination)
+    {
+        lock (_gate)
+        {
+            EnsureOpen();
+            using (new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
+            IntPtr target = IntPtr.Zero;
+            IntPtr backup = IntPtr.Zero;
+            try
+            {
+                var status = Native.sqlite3_open(destination, out target);
+                if (status != 0) throw new InvalidOperationException($"Cannot open backup database: {status}");
+                backup = Native.sqlite3_backup_init(target, "main", _handle, "main");
+                if (backup == IntPtr.Zero) throw new InvalidOperationException($"Cannot initialize SQLite backup: {Marshal.PtrToStringUTF8(Native.sqlite3_errmsg(target))}");
+                status = Native.sqlite3_backup_step(backup, -1);
+                if (status != 101) throw new InvalidOperationException($"SQLite backup failed: {status}");
+                status = Native.sqlite3_backup_finish(backup);
+                backup = IntPtr.Zero;
+                if (status != 0) throw new InvalidOperationException($"SQLite backup failed: {status}");
+                status = Native.sqlite3_exec(target, "PRAGMA journal_mode=DELETE", IntPtr.Zero, IntPtr.Zero, out var error);
+                if (status != 0)
+                {
+                    var message = error == IntPtr.Zero ? "Cannot finalize backup journal" : Marshal.PtrToStringUTF8(error);
+                    if (error != IntPtr.Zero) Native.sqlite3_free(error);
+                    throw new InvalidOperationException(message);
+                }
+            }
+            catch
+            {
+                if (backup != IntPtr.Zero) Native.sqlite3_backup_finish(backup);
+                if (target != IntPtr.Zero) { Native.sqlite3_close(target); target = IntPtr.Zero; }
+                File.Delete(destination);
+                throw;
+            }
+            finally { if (target != IntPtr.Zero) Native.sqlite3_close(target); }
+        }
+    }
+
+    public static void VerifyBackup(string path)
+    {
+        IntPtr db = IntPtr.Zero, statement = IntPtr.Zero;
+        try
+        {
+            if (Native.sqlite3_open_v2(path, out db, 1, IntPtr.Zero) != 0) throw new InvalidOperationException("Cannot open backup database.");
+            var status = Native.sqlite3_prepare_v2(db, "PRAGMA quick_check", -1, out statement, IntPtr.Zero);
+            if (status != 0) throw new InvalidOperationException($"Backup database integrity check could not start: {status} {Marshal.PtrToStringUTF8(Native.sqlite3_errmsg(db))}");
+            status = Native.sqlite3_step(statement);
+            if (status != 100) throw new InvalidOperationException($"Backup database integrity check failed: {status} {Marshal.PtrToStringUTF8(Native.sqlite3_errmsg(db))}");
+            var result = Marshal.PtrToStringUTF8(Native.sqlite3_column_text(statement, 0));
+            if (result != "ok" || Native.sqlite3_step(statement) != 101) throw new InvalidOperationException($"Backup database integrity check failed: {result}");
+        }
+        finally { if (statement != IntPtr.Zero) Native.sqlite3_finalize(statement); if (db != IntPtr.Zero) Native.sqlite3_close(db); }
     }
 
     public int ScalarInt(string sql, params object?[] args)
@@ -216,6 +277,7 @@ public sealed class AppDatabase : IDisposable
         private const string Library = "sqlite3";
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int sqlite3_open([MarshalAs(UnmanagedType.LPUTF8Str)] string filename, out IntPtr db);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int sqlite3_close(IntPtr db);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int sqlite3_open_v2([MarshalAs(UnmanagedType.LPUTF8Str)] string filename, out IntPtr db, int flags, IntPtr vfs);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr sqlite3_errmsg(IntPtr db);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int sqlite3_exec(IntPtr db, [MarshalAs(UnmanagedType.LPUTF8Str)] string sql, IntPtr callback, IntPtr arg, out IntPtr error);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern void sqlite3_free(IntPtr pointer);
@@ -228,6 +290,9 @@ public sealed class AppDatabase : IDisposable
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int sqlite3_column_count(IntPtr statement);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr sqlite3_column_name(IntPtr statement, int index);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr sqlite3_column_text(IntPtr statement, int index);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr sqlite3_backup_init(IntPtr destination, [MarshalAs(UnmanagedType.LPUTF8Str)] string destinationName, IntPtr source, [MarshalAs(UnmanagedType.LPUTF8Str)] string sourceName);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int sqlite3_backup_step(IntPtr backup, int pages);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int sqlite3_backup_finish(IntPtr backup);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int sqlite3_changes(IntPtr db);
     }
 }

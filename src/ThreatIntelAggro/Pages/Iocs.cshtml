@@ -8,7 +8,7 @@
  <div class="panel-head"><div><div class="eyebrow">PUBLISHED IN THE LAST @Model.Days DAYS</div><h2>@(Model.State == "archived" ? "Archived indicators" : "Indicators") <span class="count-chip">@Model.Records.Count</span></h2></div><div class="ioc-head-actions"><a class="button button-secondary" asp-page-handler="Csv" asp-route-days="@Model.Days" asp-route-vendor="@Model.Vendor" asp-route-industry="@Model.Industry" asp-route-type="@Model.Type" asp-route-search="@Model.Search" asp-route-state="@Model.State" asp-route-approval="@Model.Approval" asp-route-classification="@Model.Classification">DOWNLOAD CSV ↓</a><a class="button button-secondary" asp-page="/Iocs" asp-route-days="@Model.Days" asp-route-vendor="@Model.Vendor" asp-route-industry="@Model.Industry" asp-route-type="@Model.Type" asp-route-search="@Model.Search" asp-route-approval="@Model.Approval" asp-route-classification="@Model.Classification" asp-route-state="@(Model.State == "archived" ? "active" : "archived")">@(Model.State == "archived" ? "ACTIVE INDICATORS" : "ARCHIVE")</a></div></div>
  <form method="get" class="ioc-filters" id="ioc-filter-form">
   <input type="hidden" name="state" value="@Model.State"/>
-  <label>Time range<select name="days"><option value="7" selected="@(Model.Days == 7)">Last 7 days</option><option value="14" selected="@(Model.Days == 14)">Last 14 days</option><option value="30" selected="@(Model.Days == 30)">Last 30 days</option><option value="90" selected="@(Model.Days == 90)">Last 90 days</option><option value="365" selected="@(Model.Days == 365)">Last year</option></select></label>
+  <label>Time range<select name="days"><option value="7" selected="@(Model.Days == 7)">Last 7 days</option><option value="14" selected="@(Model.Days == 14)">Last 14 days</option><option value="30" selected="@(Model.Days == 30)">Last 30 days</option><option value="90" selected="@(Model.Days == 90)">Last 90 days</option><option value="365" selected="@(Model.Days == 365)">Last year</option><option value="3650" selected="@(Model.Days == 3650)">Last 10 years</option></select></label>
   <label>Type<select name="type"><option value="">All types</option>@foreach (var value in Model.Types) { <option value="@value" selected="@(Model.Type == value)">@value</option> }</select></label>
   <label>Vendor<select name="vendor"><option value="">All vendors</option>@foreach (var value in Model.Vendors) { <option value="@value" selected="@(Model.Vendor == value)">@value</option> }</select></label>
   <label>Industry<select name="industry"><option value="">All industries</option>@foreach (var value in Model.Industries) { <option value="@value" title="@value" selected="@(Model.Industry == value)">@Model.IndustryLabel(value)</option> }</select></label>
@@ -16,13 +16,17 @@
   <label>Approval<select name="approval"><option value="all" selected="@(Model.Approval == "all")">All indicators</option><option value="pending" selected="@(Model.Approval == "pending")">Needs approval</option><option value="approved" selected="@(Model.Approval == "approved")">Approved only</option></select></label>
   <label class="ioc-search">Search<input name="search" value="@Model.Search" placeholder="Value, context, article…"/></label><label class="ioc-api-toggle"><input type="checkbox" name="includeUnapproved" value="true" checked="@(Model.IncludeUnapproved)"/><span>Include unapproved in API example</span></label><span class="ioc-auto-apply"><i></i> AUTO APPLY</span>
  </form>
+ <div class="ioc-review-summary"><strong>Within this time range: @Model.TotalInRange total</strong><span>@Model.ContextCount context only</span><span>@Model.PendingCount unapproved</span><span>@Model.ExpiredCount expired</span><span>@Model.ExcludedCount excluded</span><span>@Model.ArchivedCount archived</span><small>Counts can overlap and do not reflect the other filters.</small></div>
+ @if (Model.State != "archived" && Model.Records.Any(x => !IocIndex.IsActionableRole(x.Role))) {
+  <form id="bulk-classify-form" method="post" asp-page-handler="BulkClassify" class="ioc-bulk-review"><partial name="_IocFilterFields" model="Model"/><label>Classify selected <select name="bulkRole" aria-label="Classification for selected indicators" required><option value="">Choose classification…</option><option value="suspicious">Suspicious</option><option value="malicious">Malicious</option></select></label><button class="small-action approve-ioc" type="submit">CLASSIFY SELECTED</button><small>Review each indicator before selecting it. Previously approved items become API eligible when classified.</small></form>
+ }
  @if (Model.Records.Count == 0) { <div class="empty-state"><div class="empty-icon">⌁</div><h3>No indicators match</h3><p>Try a wider time range or clear one of the filters.</p></div> }
  <div class="ioc-list">
  @foreach (var ioc in Model.Records) {
   var actionable = IocIndex.IsActionableRole(ioc.Role);
   var roleClass = IocIndex.MatchesClassification(ioc.Role, "suspicious") ? "ioc-role-suspicious" : IocIndex.MatchesClassification(ioc.Role, "malicious") ? "ioc-role-malicious" : "ioc-role-context";
   <article class="ioc-row">
-   <div class="ioc-type">@ioc.Type</div>
+   <div class="ioc-type">@ioc.Type @if (!actionable && Model.State != "archived") { <label class="ioc-select"><input type="checkbox" name="selection" form="bulk-classify-form" value="@IocsModel.BulkToken(ioc)"/> Select for review<span class="sr-only">: @ioc.Value</span></label> }</div>
    <div class="ioc-main">
     <h3><code>@ioc.Value</code>@if (!string.IsNullOrWhiteSpace(ioc.NormalizedValue) && ioc.NormalizedValue != ioc.Value) { <small>Normalized: <code>@ioc.NormalizedValue</code></small> }</h3>
     <p>@ioc.Context</p>
@@ -50,7 +54,7 @@
  <div class="list-foot">@if (Model.State == "archived") { <span>Archived indicators are excluded from the read-only API.</span> } else { <><span>API: <code>GET @Model.ApiExampleUrl</code></span><span>Only malicious or suspicious indicators are included in API and CSV results. The API returns approved indicators by default; set <code>includeUnapproved=true</code> to include pending ones.</span></> }</div>
 </section>
 @if (Model.State != "archived") { <section class="panel api-panel"><div class="eyebrow">READ ONLY JSON API</div><h2>Matching indicators</h2><p>This request uses the current filters. Context-only indicators are excluded from the API.</p><pre><code>GET @Model.ApiExampleUrl</code></pre></section> }
-<script>
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
 (() => {
   const form = document.querySelector('#ioc-filter-form');
   if (!form) return;

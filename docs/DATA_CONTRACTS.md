@@ -2,6 +2,8 @@
 
 These are implementation specifications for versioned JSON Schema contracts. The implementation milestone will materialize them as strict schemas and C# records, using the provider-supported JSON Schema subset for generation and full local validation before persistence. Examples below are synthetic and contain no generated detection query.
 
+**Implementation status:** New article and detection outputs use schema `1.1`; previously saved `1.0` output remains readable. The implemented schemas are defined in `AnalysisService.cs`, and `ArticleEvidenceValidator.cs` verifies fetched source IDs and exact excerpts for summaries, findings, indicators, mappings and detection behaviors. The richer mapping specializations, taxonomy checks and several additional detection fields described below remain design targets rather than implemented guarantees. An exact excerpt establishes provenance, not that a claim or KQL query is correct.
+
 ## Shared conventions
 
 - Schema versions start at `1.0`. Changing a field's meaning requires a new version, with a migration/projection strategy.

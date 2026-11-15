@@ -7,4 +7,12 @@
     <UserSecretsId>58a3e072-8442-45eb-a479-95a39f72a4e4</UserSecretsId>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="JsonSchema.Net" Version="9.6.0" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Schemas/XDRConverter.schema.json" />
+  </ItemGroup>
+
 </Project>
