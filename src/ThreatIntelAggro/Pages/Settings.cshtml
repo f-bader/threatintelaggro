@@ -3,8 +3,23 @@
 @{
     ViewData["Title"] = "Settings";
 }
-<div class="page-heading"><div><div class="eyebrow">LOCAL CONTROLS / IOC HYGIENE</div><h1>Settings</h1><p class="subhead">Manage indicator exclusions applied across results and exports.</p></div><a class="button button-secondary" asp-page="/Index">← &nbsp;Back to inbox</a></div>
+<div class="page-heading"><div><div class="eyebrow">LOCAL CONTROLS / ANALYSIS / IOC HYGIENE</div><h1>Settings</h1><p class="subhead">Configure analysis and indicator handling.</p></div><a class="button button-secondary" asp-page="/Index">← &nbsp;Back to inbox</a></div>
 @if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
+<section class="panel ai-settings-panel"><div class="panel-head"><div><div class="eyebrow">ANALYSIS ENGINE</div><h2>AI model and reasoning</h2></div><span class="api-key-status @(Model.CurrentAiSettings.IsConfigured ? "is-active" : "is-missing")">@(Model.CurrentAiSettings.IsConfigured ? "CONFIGURED" : "SETUP REQUIRED")</span></div>
+<p class="form-footnote ai-settings-status">@(Model.ApiKeyConfigured ? "OpenAI credential is configured." : "OpenAI credential is missing; add it through the deployment secret or environment configuration.") Model capability is checked when a request runs. Provider errors are shown on the affected article. Effort can affect response time and token use.</p>
+@if (Model.AvailableModels.Count > 0) { <datalist id="ai-model-options">@foreach (var modelId in Model.AvailableModels) { <option value="@modelId"></option> }</datalist> }
+<form method="post" asp-page-handler="SaveAiSettings" class="ai-settings-form">
+<div asp-validation-summary="ModelOnly" class="validation"></div>
+<label>Default model or deployment ID<input asp-for="AiModel" list="ai-model-options" required maxlength="200" placeholder="provider model or Azure deployment"/><small>Refresh the OpenAI list or enter a deployment ID.</small></label>
+<label>Default reasoning effort<select asp-for="AiEffort"><option value="">Provider default</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+<details class="ai-stage-overrides"><summary>ADVANCED · PER-STAGE OVERRIDES</summary><div class="ai-stage-grid">
+<label>Research model<input asp-for="ResearchModel" list="ai-model-options" maxlength="200" placeholder="Inherit default model"/></label><label>Research effort<select asp-for="ResearchEffort"><option value="">Inherit default effort</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+<label>Article analysis model<input asp-for="ArticleModel" list="ai-model-options" maxlength="200" placeholder="Inherit default model"/></label><label>Article analysis effort<select asp-for="ArticleEffort"><option value="">Inherit default effort</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+<label>Detection model<input asp-for="DetectionModel" list="ai-model-options" maxlength="200" placeholder="Inherit default model"/></label><label>Detection effort<select asp-for="DetectionEffort"><option value="">Inherit default effort</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+<label>KQL repair model<input asp-for="RepairModel" list="ai-model-options" maxlength="200" placeholder="Inherit default model"/></label><label>KQL repair effort<select asp-for="RepairEffort"><option value="">Inherit default effort</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+</div></details><button class="button button-primary" type="submit">SAVE AI SETTINGS</button></form>
+<form method="post" asp-page-handler="RefreshModels" class="ai-model-refresh"><button class="small-action" type="submit">LOAD OPENAI MODEL IDS</button><span>Uses the configured credential to list available IDs; it does not generate a response.</span></form>
+<p class="form-footnote">Settings are saved in the local database. Blank stage overrides inherit the defaults. An analysis keeps the model and effort it started with across retries.</p></section>
 <section class="panel api-access-panel">
   <div class="panel-head">
     <div><div class="eyebrow">MACHINE ACCESS</div><h2>IOC API key</h2></div>

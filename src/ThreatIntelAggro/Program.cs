@@ -21,6 +21,7 @@ var dataDirectory = Environment.GetEnvironmentVariable("AGGRO_DATA_DIR") ?? Path
 Directory.CreateDirectory(Path.Combine(dataDirectory, "keys"));
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDirectory, "keys")));
 builder.Services.AddSingleton<AppDatabase>();
+builder.Services.AddSingleton<AiModelSettingsService>();
 builder.Services.AddSingleton<IocCountCache>();
 builder.Services.AddSingleton<BackupManager>();
 builder.Services.AddHostedService<BackupWorker>();
@@ -32,6 +33,7 @@ builder.Services.AddHttpClient<AnalysisService>(client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("ThreatIntelAggro/0.1 (+self-hosted research console)");
 }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = TimeSpan.FromMinutes(10) });
 builder.Services.AddHttpClient(nameof(M365EndpointUpdater), client => client.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddHttpClient("OpenAIModels", client => client.Timeout = TimeSpan.FromSeconds(20));
 builder.Services.AddHostedService<FeedScheduler>();
 builder.Services.AddHostedService<AnalysisQueue>();
 builder.Services.AddHostedService<M365EndpointUpdater>();
@@ -39,6 +41,12 @@ builder.Services.AddHostedService<M365EndpointUpdater>();
 var app = builder.Build();
 var db = app.Services.GetRequiredService<AppDatabase>();
 db.Initialize();
+if (IocExclusionSettings.Get(db, "ai_settings_legacy_checked") is null)
+{
+    if (db.ScalarInt("SELECT COUNT(*) FROM feeds") > 0 && IocExclusionSettings.Get(db, "ai_model_settings") is null)
+        IocExclusionSettings.Set(db, "ai_settings_legacy_pending", "true");
+    IocExclusionSettings.Set(db, "ai_settings_legacy_checked", "true");
+}
 db.SeedUnit42();
 
 app.UseForwardedHeaders();

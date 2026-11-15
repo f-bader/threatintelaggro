@@ -53,6 +53,8 @@ The response contains `generatedUtc`, the applied `query`, `count`, and an `item
 
 The indicator page summarizes context-only, unapproved, expired, excluded and archived indicators within the chosen time range; categories may overlap. Select individual context-only indicators to classify them together after review. Expired and excluded indicators are not shown in the active list; use Settings to inspect the expiry and exclusion rules.
 
+Choose the AI model or deployment ID and reasoning effort in Settings. The OpenAI model list can be refreshed without generating a response; Azure deployment IDs can be entered manually. Optional per-stage settings override the defaults for research, article analysis, detection generation, or KQL repair. New installations need a model selection before analysis. Existing installations import their prior effective model and effort settings once, and each analysis retains its settings across retries. Provider and model capability errors appear on the affected article; credentials remain in deployment configuration and are not stored in the application database.
+
 Feeds have an optional **IOC pre approved** setting. When enabled, new IOC findings from that feed are approved after the full analysis completes, and existing indicators from completed, evidence-validated analyses are approved when the setting is enabled. Analyses created before evidence validation was introduced are not automatically approved; review their indicators manually. Turning it off does not revoke previous approvals.
 
 To explicitly include indicators that still need review:

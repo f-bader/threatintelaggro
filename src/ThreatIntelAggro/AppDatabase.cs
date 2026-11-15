@@ -49,6 +49,7 @@ public sealed class AppDatabase : IDisposable
                     article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
                     stage_key TEXT NOT NULL, response_id TEXT, status TEXT NOT NULL DEFAULT 'submitting',
                     result_text TEXT, error TEXT, updated_utc TEXT NOT NULL,
+                    requested_model TEXT NOT NULL DEFAULT '', actual_model TEXT, reasoning_effort TEXT, config_revision INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(article_id,stage_key)
                 );
                 CREATE TABLE IF NOT EXISTS detections (
@@ -61,6 +62,7 @@ public sealed class AppDatabase : IDisposable
                     UNIQUE(article_id,local_key)
                 );
                 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS article_ai_config (article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,config_json TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ioc_exclusions (id INTEGER PRIMARY KEY AUTOINCREMENT,value TEXT NOT NULL UNIQUE,created_utc TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ioc_dismissals (article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,ioc_type TEXT NOT NULL,ioc_value TEXT NOT NULL,dismissed_utc TEXT NOT NULL,PRIMARY KEY(article_id,ioc_type,ioc_value));
                 CREATE TABLE IF NOT EXISTS ioc_role_overrides (
@@ -87,6 +89,12 @@ public sealed class AppDatabase : IDisposable
             foreach (var migration in new[] { "ALTER TABLE detections ADD COLUMN xdr_tactic TEXT NOT NULL DEFAULT ''", "ALTER TABLE detections ADD COLUMN xdr_techniques_json TEXT NOT NULL DEFAULT '[]'", "ALTER TABLE detections ADD COLUMN behaviors_json TEXT NOT NULL DEFAULT '[]'", "ALTER TABLE detections ADD COLUMN source_ids_json TEXT NOT NULL DEFAULT '[]'" })
             { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
             try { Exec("ALTER TABLE detections ADD COLUMN guid TEXT NOT NULL DEFAULT ''"); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { }
+            foreach (var migration in new[] {
+                "ALTER TABLE analysis_responses ADD COLUMN requested_model TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE analysis_responses ADD COLUMN actual_model TEXT",
+                "ALTER TABLE analysis_responses ADD COLUMN reasoning_effort TEXT",
+                "ALTER TABLE analysis_responses ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 0"
+            }) { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
             Exec("UPDATE detections SET guid=lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-a' || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))) WHERE guid=''");
             Exec("UPDATE articles SET ai_status='pending',ai_error=NULL WHERE ai_status='analyzing'");
         }

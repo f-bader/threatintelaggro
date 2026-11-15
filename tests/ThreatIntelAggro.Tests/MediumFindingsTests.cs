@@ -313,7 +313,9 @@ public sealed class MediumFindingsTests
         using var http = new HttpClient(new AnalysisHandler(stages));
         using var fetcher = new SafePublicFetcher(new AnalysisHandler(new Queue<string>()));
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["OpenAI:ApiKey"] = "fixture" }).Build();
-        var service = new AnalysisService(http, fetcher, db, config, NullLogger<AnalysisService>.Instance);
+        var modelSettings = new AiModelSettingsService(db, config);
+        modelSettings.Save(new AiModelSettings("fixture-model", "high", ResearchModel: "fixture-research", ResearchEffort: "low"));
+        var service = new AnalysisService(http, fetcher, db, config, NullLogger<AnalysisService>.Instance, modelSettings);
         var result = await service.AnalyzeOneAsync(1);
         var article = db.Query("SELECT analysis_json,source_ledger_json,ai_status FROM articles WHERE id=1")[0];
         var detections = db.Query("SELECT local_key,alert_title,kql,status,guid FROM detections WHERE article_id=1 ORDER BY local_key");
@@ -336,7 +338,65 @@ public sealed class MediumFindingsTests
             Assert.Equal(schemaArticle, article["analysis_json"]);
             Assert.Equal(2, detections.Count);
             Assert.Equal("Fixture article", db.Query("SELECT content FROM source_snapshots WHERE article_id=1 AND source_id='src_article'")[0]["content"]);
+            var requestMetadata = db.Query("SELECT stage_key,requested_model,reasoning_effort,config_revision FROM analysis_responses ORDER BY stage_key");
+            Assert.Equal(3, requestMetadata.Count);
+            Assert.All(requestMetadata.Where(item => item["stage_key"] != "research"), item => Assert.Equal("fixture-model", item["requested_model"]));
+            Assert.Equal("fixture-research", requestMetadata.Single(item => item["stage_key"] == "research")["requested_model"]);
+            Assert.Equal("low", requestMetadata.Single(item => item["stage_key"] == "research")["reasoning_effort"]);
+            Assert.Equal("high", requestMetadata.Single(item => item["stage_key"] == "article-analysis")["reasoning_effort"]);
+            Assert.All(requestMetadata, item => Assert.Equal("1", item["config_revision"]));
+            var originalSnapshot = db.Query("SELECT config_json FROM article_ai_config WHERE article_id=1")[0]["config_json"]!;
+            Assert.Equal("fixture-model", AiModelSettingsService.FromSnapshot(originalSnapshot).Model);
+            modelSettings.Save(new AiModelSettings("new-default", "low"));
+            Assert.Equal(originalSnapshot, db.Query("SELECT config_json FROM article_ai_config WHERE article_id=1")[0]["config_json"]);
         }
+    }
+
+    [Fact]
+    public void AiSettingsPersistDefaultsOverridesAndRevision()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var config = new ConfigurationBuilder().Build();
+        var service = new AiModelSettingsService(fixture.Database, config);
+        Assert.False(service.Read().IsConfigured);
+        var saved = service.Save(new AiModelSettings("provider/model-v2", "medium", ResearchEffort: "low", DetectionModel: "deployment-prod", DetectionEffort: "high"));
+        var reloaded = new AiModelSettingsService(fixture.Database, config).Read();
+        Assert.Equal(1, saved.Revision);
+        Assert.Equal(saved, reloaded);
+        Assert.Equal(("provider/model-v2", "low"), reloaded.ForStage("research"));
+        Assert.Equal(("deployment-prod", "high"), reloaded.ForStage("detection-generation"));
+        Assert.Equal(("provider/model-v2", "medium"), reloaded.ForStage("article-analysis"));
+        Assert.Equal(2, service.Save(saved with { Effort = "high" }).Revision);
+    }
+
+    [Theory]
+    [InlineData("invalid model!", "high")]
+    [InlineData("valid-model", "unsupported")]
+    public void AiSettingsRejectInvalidModelAndEffort(string model, string effort)
+    {
+        using var fixture = DatabaseFixture.Create();
+        var service = new AiModelSettingsService(fixture.Database, new ConfigurationBuilder().Build());
+        Assert.Throws<ArgumentException>(() => service.Save(new AiModelSettings(model, effort)));
+    }
+
+    [Fact]
+    public void AiSettingsImportLegacyValuesOnceForExistingData()
+    {
+        using var fixture = DatabaseFixture.Create();
+        fixture.Database.Execute("INSERT INTO feeds(title,url,created_utc) VALUES(?,?,?)", "Existing", "https://example.org/feed", DateTimeOffset.UtcNow.ToString("O"));
+        IocExclusionSettings.Set(fixture.Database, "ai_settings_legacy_pending", "true");
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["OpenAI:Model"] = "legacy-model", ["OpenAI:ReasoningEffort"] = "medium",
+            ["OpenAI:ResearchEffort"] = "low", ["OpenAI:AnalysisEffort"] = "high", ["OpenAI:RepairEffort"] = "low"
+        }).Build();
+        var service = new AiModelSettingsService(fixture.Database, config);
+        var imported = service.Read();
+        Assert.Equal("legacy-model", imported.Model);
+        Assert.Equal("medium", imported.Effort);
+        Assert.Equal("high", imported.DetectionEffort);
+        IocExclusionSettings.Set(fixture.Database, "ai_settings_legacy_pending", "true");
+        Assert.Equal(imported, service.Read());
     }
 
     private sealed class AnalysisHandler(Queue<string> stages) : HttpMessageHandler
