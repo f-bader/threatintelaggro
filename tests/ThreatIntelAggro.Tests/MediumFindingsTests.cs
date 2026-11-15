@@ -21,6 +21,32 @@ public sealed class DatabaseChecksCollection;
 [Collection("Database checks")]
 public sealed class MediumFindingsTests
 {
+    [Fact]
+    public async Task FeedRefreshRemovesXmlInvalidCharactersAndImportsEntries()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        db.Execute("INSERT INTO feeds(title,url,created_utc) VALUES(?,?,?)", "Fixture feed", "https://example.test/feed.xml", DateTimeOffset.UtcNow.ToString("O"));
+        var feedXml = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0"><channel><title>Fixture feed</title>
+              <item><title>Entry with control character</title><link>https://example.test/one</link><description><![CDATA[BeforeINVALIDAfter]]></description></item>
+              <item><title>Valid entry</title><link>https://example.test/two</link></item>
+            </channel></rss>
+            """.Replace("INVALID", "\u000b", StringComparison.Ordinal);
+        using var fetcher = new SafePublicFetcher(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(feedXml, Encoding.UTF8, "application/rss+xml") }));
+        var reader = new FeedReader(fetcher, db, NullLogger<FeedReader>.Instance);
+
+        var added = await reader.RefreshAsync(1);
+
+        Assert.Equal(2, added);
+        var articles = db.Query("SELECT title,summary FROM articles ORDER BY id");
+        Assert.Equal("Entry with control character", articles[0]["title"]);
+        Assert.Equal("BeforeAfter", articles[0]["summary"]);
+        Assert.Equal("Valid entry", articles[1]["title"]);
+        Assert.Null(db.Query("SELECT last_error FROM feeds WHERE id=1").Single()["last_error"]);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("192.0.2.15")]

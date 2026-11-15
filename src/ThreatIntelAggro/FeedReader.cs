@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Xml.Linq;
 using System.Xml;
+using System.Text.RegularExpressions;
 
 namespace ThreatIntelAggro;
 
@@ -15,9 +17,13 @@ public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, 
         try
         {
             var bytes = await fetcher.GetAsync(url, 10 * 1024 * 1024, TimeSpan.FromSeconds(25), cancellationToken);
-            using var bounded = new MemoryStream(bytes);
-            bounded.Position = 0;
-            using var reader = XmlReader.Create(bounded, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 10_000_000 });
+            using var text = new StringReader(CleanXmlCharacters(DecodeXml(bytes)));
+            using var reader = XmlReader.Create(text, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersInDocument = 10_000_000
+            });
             var xml = XDocument.Load(reader);
             var feedTitle = Text(xml.Root?.Elements().FirstOrDefault(x => x.Name.LocalName == "title")) ?? feed["title"] ?? "RSS feed";
             var items = xml.Descendants().Where(x => x.Name.LocalName is "item" or "entry").Take(300).ToList();
@@ -28,7 +34,7 @@ public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, 
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var linkNode = item.Elements().FirstOrDefault(x => x.Name.LocalName == "link" && ((string?)x.Attribute("rel") is null or "alternate"));
-                var itemUrl = (string?)linkNode?.Attribute("href") ?? Text(linkNode) ?? Text(item.Elements().FirstOrDefault(x => x.Name.LocalName is "guid" or "id")) ?? "";
+                var itemUrl = CleanXmlCharacters((string?)linkNode?.Attribute("href") ?? Text(linkNode) ?? Text(item.Elements().FirstOrDefault(x => x.Name.LocalName is "guid" or "id")) ?? "");
                 if (!Uri.TryCreate(itemUrl, UriKind.Absolute, out var articleUri) || articleUri.Scheme is not ("https" or "http")) continue;
                 var dateText = Text(item.Elements().FirstOrDefault(x => x.Name.LocalName is "pubDate" or "published" or "updated" or "date"));
                 var hasDate = DateTimeOffset.TryParse(dateText, out var published);
@@ -55,7 +61,58 @@ public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, 
 
     private static string Limit(string value, int max) => value.Length <= max ? value : value[..max];
 
-    private static string? Text(XElement? element) => element is null ? null : (element.HasElements ? string.Concat(element.DescendantNodes().OfType<XText>().Select(x => x.Value)) : element.Value).Trim();
+    private static string DecodeXml(byte[] bytes)
+    {
+        var encoding = Encoding.UTF8;
+        var preambleLength = 0;
+        if (bytes.AsSpan().StartsWith(new byte[] { 0x00, 0x00, 0xFE, 0xFF })) { encoding = new UTF32Encoding(true, true); preambleLength = 4; }
+        else if (bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE, 0x00, 0x00 })) { encoding = new UTF32Encoding(false, true); preambleLength = 4; }
+        else if (bytes.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF })) { encoding = Encoding.UTF8; preambleLength = 3; }
+        else if (bytes.AsSpan().StartsWith(new byte[] { 0xFE, 0xFF })) { encoding = Encoding.BigEndianUnicode; preambleLength = 2; }
+        else if (bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE })) { encoding = Encoding.Unicode; preambleLength = 2; }
+        else if (bytes.Length >= 4 && bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0x00 && bytes[3] == 0x3C) encoding = new UTF32Encoding(true, false);
+        else if (bytes.Length >= 4 && bytes[0] == 0x3C && bytes[1] == 0x00 && bytes[2] == 0x00 && bytes[3] == 0x00) encoding = new UTF32Encoding(false, false);
+        else if (bytes.Length >= 4 && bytes[0] == 0x00 && bytes[1] == 0x3C && bytes[2] == 0x00 && bytes[3] == 0x3F) encoding = Encoding.BigEndianUnicode;
+        else if (bytes.Length >= 4 && bytes[0] == 0x3C && bytes[1] == 0x00 && bytes[2] == 0x3F && bytes[3] == 0x00) encoding = Encoding.Unicode;
+        else
+        {
+            var declaration = Encoding.ASCII.GetString(bytes, 0, Math.Min(bytes.Length, 512));
+            var match = Regex.Match(declaration, "encoding\\s*=\\s*['\\\"](?<name>[^'\\\"]+)['\\\"]", RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                try { encoding = Encoding.GetEncoding(match.Groups["name"].Value); }
+                catch (ArgumentException) { }
+            }
+        }
+
+        return encoding.GetString(bytes, preambleLength, bytes.Length - preambleLength);
+    }
+
+    private static string? Text(XElement? element) => element is null ? null : CleanXmlCharacters(element.HasElements ? string.Concat(element.DescendantNodes().OfType<XText>().Select(x => x.Value)) : element.Value).Trim();
+
+    private static string CleanXmlCharacters(string value)
+    {
+        StringBuilder? cleaned = null;
+        for (var index = 0; index < value.Length; index++)
+        {
+            var current = value[index];
+            var valid = current is '\t' or '\n' or '\r' || current >= '\u0020' && !char.IsSurrogate(current) && current is not '\uFFFE' and not '\uFFFF';
+            if (char.IsHighSurrogate(current) && index + 1 < value.Length && char.IsLowSurrogate(value[index + 1]))
+            {
+                if (cleaned is not null) cleaned.Append(current).Append(value[++index]);
+                else index++;
+                continue;
+            }
+            if (valid)
+            {
+                if (cleaned is not null) cleaned.Append(current);
+                continue;
+            }
+
+            cleaned ??= new StringBuilder(value.Length).Append(value, 0, index);
+        }
+        return cleaned?.ToString() ?? value;
+    }
 
 
 }
