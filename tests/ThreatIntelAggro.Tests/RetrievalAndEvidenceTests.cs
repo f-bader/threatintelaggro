@@ -120,8 +120,8 @@ public sealed class RetrievalAndEvidenceTests
         article["iocs"]![0]!["normalized_value"] = "evil.example";
         article["iocs"]![0]!["role"] = "malware";
         var roleError = Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
-        Assert.Contains("iocs[0].role", roleError.Message);
-        Assert.Contains("malware", roleError.Message);
+        Assert.Contains("role", roleError.Message);
+        Assert.Contains("invalid value", roleError.Message);
         article["iocs"]![0]!["role"] = "malicious";
         article["iocs"]![0]!["evidence"] = new JsonArray();
         Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
@@ -136,6 +136,11 @@ public sealed class RetrievalAndEvidenceTests
         {"schema_version":"1.1","outcome":"drafts_generated","reason":"fixture","coverage":[],"detections":[{"local_key":"test","alert_title":"test","description":"test","severity":"low","rationale":"test","kql":"DeviceEvents | take 1","tactic":"Execution","techniques":[],"behaviors":[{"description":"file write","basis":"source_reported","confidence":"high","evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"The process wrote a file."}]}],"source_ids":["src_article"],"playbook":{"title":"test","triage_steps":[],"investigation_steps":[],"response_options":[]},"mitre_mappings":[],"telemetry":{"tables":[],"required_columns":[],"assumptions":[],"known_gaps":[]}}]}
         """)!;
         ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema);
+        var severitySchema = schema["properties"]!["detections"]!["items"]!["properties"]!["severity"]!;
+        Assert.Equal(new[] { "informational", "low", "medium", "high" }, severitySchema["enum"]!.AsArray().Select(x => x!.GetValue<string>()));
+        detection["detections"]![0]!["severity"] = "Medium";
+        Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema));
+        detection["detections"]![0]!["severity"] = "low";
         sources[0]!["inspection_status"] = "search_excerpt";
         ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema);
         sources[0]!["inspection_status"] = "inaccessible";
