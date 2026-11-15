@@ -10,6 +10,8 @@ public sealed class SettingsModel(AppDatabase database) : PageModel
     public string M365RefreshedUtc { get; private set; } = "";
     public string M365RefreshError { get; private set; } = "";
     public IocExpiryDays ExpiryDays { get; private set; } = ExpirySettings.ReadDefaults();
+    public bool ApiKeyActive { get; private set; }
+    public string ApiKeyLastRotatedUtc { get; private set; } = "";
     [BindProperty] public string IocExclusion { get; set; } = "";
     [BindProperty] public int IpExpiryDays { get; set; } = ExpirySettings.DefaultIpDays;
     [BindProperty] public int DomainExpiryDays { get; set; } = ExpirySettings.DefaultDomainDays;
@@ -22,8 +24,13 @@ public sealed class SettingsModel(AppDatabase database) : PageModel
     [BindProperty] public int CertificateExpiryDays { get; set; } = ExpirySettings.DefaultCertificateDays;
     [BindProperty] public int OtherExpiryDays { get; set; } = ExpirySettings.DefaultOtherDays;
     [TempData] public string? Notice { get; set; }
+    [TempData] public string? GeneratedApiKey { get; set; }
 
-    public void OnGet() => Load();
+    public void OnGet()
+    {
+        Load();
+        if (!string.IsNullOrWhiteSpace(GeneratedApiKey)) Response.Headers.CacheControl = "no-store";
+    }
 
     public IActionResult OnPostAddIocExclusion()
     {
@@ -76,8 +83,33 @@ public sealed class SettingsModel(AppDatabase database) : PageModel
         return RedirectToPage();
     }
 
+    public IActionResult OnPostRotateApiKey()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var currentHash = IocExclusionSettings.Get(database, "api_key_current_hash");
+        if (!string.IsNullOrWhiteSpace(currentHash))
+        {
+            IocExclusionSettings.Set(database, "api_key_previous_hash", currentHash);
+            IocExclusionSettings.Set(database, "api_key_previous_expires_utc", now.AddHours(24).ToString("O"));
+        }
+        else
+        {
+            IocExclusionSettings.Set(database, "api_key_previous_hash", "");
+            IocExclusionSettings.Set(database, "api_key_previous_expires_utc", "");
+        }
+
+        var key = ApiKeySecurity.Generate();
+        IocExclusionSettings.Set(database, "api_key_current_hash", ApiKeySecurity.Hash(key));
+        IocExclusionSettings.Set(database, "api_key_last_rotated_utc", now.ToString("O"));
+        GeneratedApiKey = key;
+        Notice = "API key rotated. Copy the new value now; it will not be shown again.";
+        return RedirectToPage();
+    }
+
     private void Load()
     {
+        ApiKeyActive = !string.IsNullOrWhiteSpace(IocExclusionSettings.Get(database, "api_key_current_hash"));
+        ApiKeyLastRotatedUtc = IocExclusionSettings.Get(database, "api_key_last_rotated_utc");
         IocExclusions = database.Query("SELECT id,value,created_utc FROM ioc_exclusions ORDER BY value COLLATE NOCASE");
         ExcludeM365 = IocExclusionSettings.Get(database, "exclude_m365_endpoints") == "true";
         M365RefreshedUtc = IocExclusionSettings.Get(database, "m365_endpoints_refreshed_utc");

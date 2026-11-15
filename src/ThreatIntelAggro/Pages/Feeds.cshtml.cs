@@ -66,7 +66,7 @@ public class FeedsModel(AppDatabase database, FeedReader reader) : PageModel
         catch (Exception e) when (e.Message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase)) { Notice = "Another source already uses that feed URL."; return RedirectToPage(); }
         database.Execute("UPDATE articles SET feed_title=? WHERE feed_id=?", title, id);
         if (iocAutoApprove)
-            foreach (var article in database.Query("SELECT id,analysis_json FROM articles WHERE feed_id=? AND analysis_json IS NOT NULL", id))
+            foreach (var article in database.Query("SELECT id,analysis_json FROM articles WHERE feed_id=? AND analysis_json IS NOT NULL AND evidence_verified=1 AND ai_status='analyzed'", id))
                 IocIndex.ApproveArticle(database, long.Parse(article["id"]!), article["analysis_json"]);
         Notice = "Feed updated."; return RedirectToPage();
     }

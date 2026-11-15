@@ -11,6 +11,7 @@ public sealed class IocsModel(AppDatabase database) : PageModel
     public string[] Vendors { get; private set; } = [];
     public string[] Industries { get; private set; } = [];
     public string[] Types { get; private set; } = [];
+    public string[] Classifications { get; private set; } = [];
     public string ApiExampleUrl { get; private set; } = "/api/iocs?days=30";
     public IocExpiryDays ExpiryDays { get; private set; } = ExpirySettings.ReadDefaults();
     [BindProperty(SupportsGet = true)] public int Days { get; set; } = 30;
@@ -20,6 +21,7 @@ public sealed class IocsModel(AppDatabase database) : PageModel
     [BindProperty(SupportsGet = true)] public string? Search { get; set; }
     [BindProperty(SupportsGet = true)] public string State { get; set; } = "active";
     [BindProperty(SupportsGet = true)] public string Approval { get; set; } = "all";
+    [BindProperty(SupportsGet = true)] public string Classification { get; set; } = "all";
     [BindProperty(SupportsGet = true)] public bool IncludeUnapproved { get; set; }
 
     public void OnGet() => Load();
@@ -28,7 +30,7 @@ public sealed class IocsModel(AppDatabase database) : PageModel
     {
         Load();
         var builder = new StringBuilder("type,value,normalized_value,approval,expires_utc,role,context,confidence,basis,article_title,article_url,article_date,vendors,industries,mitre\r\n");
-        foreach (var ioc in Records)
+        foreach (var ioc in Records.Where(ioc => IocIndex.IsActionableRole(ioc.Role)))
         {
             var row = new[] { ioc.Type, ioc.Value, ioc.NormalizedValue ?? "", ioc.Approved ? "approved" : "unapproved", ioc.ExpiresUtc?.ToString("O") ?? "", ioc.Role, ioc.Context, ioc.Confidence, ioc.Basis, ioc.ArticleTitle, ioc.ArticleUrl, ioc.ArticleDate, string.Join("; ", ioc.Vendors), string.Join("; ", ioc.Industries), string.Join("; ", ioc.Mitre) };
             builder.AppendJoin(',', row.Select(Csv)).Append("\r\n");
@@ -41,13 +43,15 @@ public sealed class IocsModel(AppDatabase database) : PageModel
         Days = Math.Clamp(Days, 1, 3650);
         State = State == "archived" ? "archived" : "active";
         Approval = Approval is "approved" or "pending" ? Approval : "all";
+        Classification = Classification is "suspicious" or "malicious" or "context" ? Classification : "all";
         ExpiryDays = ExpirySettings.Read(database);
         var archived = State == "archived";
-        var visible = IocIndex.Read(database, Days, archived: archived, includeUnapproved: true);
-        Vendors = FacetValues(visible.Where(x => MatchesApproval(x) && Contains(x.Industries, Industry) && Matches(x.Type, Type) && MatchesSearch(x, Search)).SelectMany(x => x.Vendors));
-        Industries = FacetValues(visible.Where(x => MatchesApproval(x) && Contains(x.Vendors, Vendor) && Matches(x.Type, Type) && MatchesSearch(x, Search)).SelectMany(x => x.Industries));
-        Types = FacetValues(visible.Where(x => MatchesApproval(x) && Contains(x.Vendors, Vendor) && Contains(x.Industries, Industry) && MatchesSearch(x, Search)).Select(x => x.Type));
-        Records = visible.Where(x => MatchesApproval(x) && Contains(x.Vendors, Vendor) && Contains(x.Industries, Industry) && Matches(x.Type, Type) && MatchesSearch(x, Search)).ToArray();
+        var visible = IocIndex.Read(database, Days, archived: archived, includeUnapproved: true, includeNonActionable: true);
+        Classifications = new[] { "malicious", "suspicious", "context" }.Where(c => c == Classification || visible.Any(x => IocIndex.MatchesClassification(x.Role, c) && MatchesApproval(x) && Contains(x.Vendors, Vendor) && Contains(x.Industries, Industry) && Matches(x.Type, Type) && MatchesSearch(x, Search))).ToArray();
+        Vendors = FacetValues(visible.Where(x => IocIndex.MatchesClassification(x.Role, Classification) && MatchesApproval(x) && Contains(x.Industries, Industry) && Matches(x.Type, Type) && MatchesSearch(x, Search)).SelectMany(x => x.Vendors));
+        Industries = FacetValues(visible.Where(x => IocIndex.MatchesClassification(x.Role, Classification) && MatchesApproval(x) && Contains(x.Vendors, Vendor) && Matches(x.Type, Type) && MatchesSearch(x, Search)).SelectMany(x => x.Industries));
+        Types = FacetValues(visible.Where(x => IocIndex.MatchesClassification(x.Role, Classification) && MatchesApproval(x) && Contains(x.Vendors, Vendor) && Contains(x.Industries, Industry) && MatchesSearch(x, Search)).Select(x => x.Type));
+        Records = visible.Where(x => IocIndex.MatchesClassification(x.Role, Classification) && MatchesApproval(x) && Contains(x.Vendors, Vendor) && Contains(x.Industries, Industry) && Matches(x.Type, Type) && MatchesSearch(x, Search)).ToArray();
         var apiFilters = new Dictionary<string, string?>
         {
             ["days"] = Days.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -55,6 +59,7 @@ public sealed class IocsModel(AppDatabase database) : PageModel
             ["vendor"] = Vendor,
             ["industry"] = Industry,
             ["search"] = Search,
+            ["classification"] = Classification == "all" ? null : Classification,
             ["includeUnapproved"] = IncludeUnapproved ? "true" : null
         }.Where(x => !string.IsNullOrWhiteSpace(x.Value));
         ApiExampleUrl = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString("/api/iocs", apiFilters);
@@ -64,10 +69,22 @@ public sealed class IocsModel(AppDatabase database) : PageModel
     public IActionResult OnPostDismiss(long articleId, string iocType, string iocValue) => ChangeArchive(articleId, iocType, iocValue, true);
     public IActionResult OnPostRestore(long articleId, string iocType, string iocValue) => ChangeArchive(articleId, iocType, iocValue, false);
 
+    public IActionResult OnPostClassify(long articleId, string iocType, string iocValue, string? role)
+    {
+        if (!IocIndex.SetReviewedRole(database, articleId, iocType, iocValue, role)) return BadRequest("Invalid indicator or classification.");
+        return RedirectToPage(new { days = Days, vendor = Vendor, industry = Industry, type = Type, search = Search, state = State, approval = Approval, classification = Classification, includeUnapproved = IncludeUnapproved });
+    }
+
+    public IActionResult OnPostResetClassification(long articleId, string iocType, string iocValue)
+    {
+        IocIndex.ResetReviewedRole(database, articleId, iocType, iocValue);
+        return RedirectToPage(new { days = Days, vendor = Vendor, industry = Industry, type = Type, search = Search, state = State, approval = Approval, classification = Classification, includeUnapproved = IncludeUnapproved });
+    }
+
     private IActionResult SaveApproval(long articleId, string iocType, string iocValue)
     {
         IocIndex.Approve(database, articleId, iocType, iocValue);
-        return RedirectToPage(new { days = Days, vendor = Vendor, industry = Industry, type = Type, search = Search, state = State, approval = Approval, includeUnapproved = IncludeUnapproved });
+        return RedirectToPage(new { days = Days, vendor = Vendor, industry = Industry, type = Type, search = Search, state = State, approval = Approval, classification = Classification, includeUnapproved = IncludeUnapproved });
     }
 
     private IActionResult ChangeArchive(long articleId, string iocType, string iocValue, bool archive)
@@ -76,7 +93,7 @@ public sealed class IocsModel(AppDatabase database) : PageModel
             database.Execute("INSERT OR IGNORE INTO ioc_dismissals(article_id,ioc_type,ioc_value,dismissed_utc) VALUES(?,?,?,?)", articleId, iocType, iocValue, DateTimeOffset.UtcNow.ToString("O"));
         else
             database.Execute("DELETE FROM ioc_dismissals WHERE article_id=? AND ioc_type=? AND ioc_value=?", articleId, iocType, iocValue);
-        return RedirectToPage(new { days = Days, vendor = Vendor, industry = Industry, type = Type, search = Search, state = State, approval = Approval, includeUnapproved = IncludeUnapproved });
+        return RedirectToPage(new { days = Days, vendor = Vendor, industry = Industry, type = Type, search = Search, state = State, approval = Approval, classification = Classification, includeUnapproved = IncludeUnapproved });
     }
 
     public string? VirusTotalUrl(IocRecord ioc)
@@ -111,5 +128,16 @@ public sealed class IocsModel(AppDatabase database) : PageModel
         return value[..35].TrimEnd() + "…";
     }
 
-    private static string Csv(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
+    private static string Csv(string value)
+    {
+        var index = 0;
+        var hasControl = false;
+        while (index < value.Length && (char.IsWhiteSpace(value[index]) || value[index] == '\ufeff' || char.IsControl(value[index])))
+        {
+            hasControl |= char.IsControl(value[index]);
+            index++;
+        }
+        if (hasControl || (index < value.Length && "=+-@".Contains(value[index]))) value = "'" + value;
+        return $"\"{value.Replace("\"", "\"\"")}\"";
+    }
 }

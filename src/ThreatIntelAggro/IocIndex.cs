@@ -6,12 +6,12 @@ public sealed record IocRecord(
     string Type, string Value, string? NormalizedValue, string Role, string Context,
     string Confidence, string Basis, string ArticleId, string ArticleTitle,
     string ArticleUrl, string ArticleDate, string[] Vendors, string[] Industries,
-    string[] Mitre, bool Approved, DateTimeOffset? ExpiresUtc);
+    string[] Mitre, bool Approved, DateTimeOffset? ExpiresUtc, string? OriginalRole = null);
 
 public static class IocIndex
 {
     public static IReadOnlyList<IocRecord> Read(AppDatabase database, int? days = null,
-        string? vendor = null, string? industry = null, string? type = null, string? search = null, bool archived = false, bool includeUnapproved = false)
+        string? vendor = null, string? industry = null, string? type = null, string? search = null, bool archived = false, bool includeUnapproved = false, bool includeNonActionable = false, string? classification = null)
     {
         var args = new List<object?>();
         var dateFilter = "";
@@ -29,6 +29,9 @@ public static class IocIndex
         var approved = database.Query("SELECT article_id,ioc_type,ioc_value FROM ioc_approvals")
             .Select(row => DismissalKey(row["article_id"] ?? "", row["ioc_type"] ?? "", row["ioc_value"] ?? ""))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var roleOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in database.Query("SELECT article_id,ioc_type,ioc_value,role FROM ioc_role_overrides"))
+            roleOverrides[DismissalKey(row["article_id"] ?? "", row["ioc_type"] ?? "", row["ioc_value"] ?? "")] = row["role"] ?? "";
         var approvalDays = ExpirySettings.Read(database);
         foreach (var article in articles)
         {
@@ -49,13 +52,17 @@ public static class IocIndex
                     if (dismissed.Contains(DismissalKey(article["id"]!, Text(ioc, "type"), value)) != archived) continue;
                     var typeName = Text(ioc, "type");
                     var key = DismissalKey(article["id"]!, typeName, value);
+                    var originalRole = Text(ioc, "role");
+                    var overridden = roleOverrides.TryGetValue(key, out var overrideRole);
+                    var effectiveRole = overridden ? overrideRole! : originalRole;
+                    if ((!includeNonActionable && !IsActionableRole(effectiveRole)) || !MatchesClassification(effectiveRole, classification)) continue;
                     var isApproved = approved.Contains(key);
                     if (!includeUnapproved && !isApproved) continue;
                     var articleDate = article["published_utc"] ?? article["first_seen_utc"] ?? "";
                     var expiryDays = ExpirySettings.ForType(typeName, approvalDays);
                     DateTimeOffset? expiresUtc = DateTimeOffset.TryParse(articleDate, out var observed) && expiryDays > 0 ? observed.AddDays(expiryDays) : null;
                     if (expiresUtc is not null && expiresUtc <= DateTimeOffset.UtcNow) continue;
-                    var record = new IocRecord(typeName, value, normalizedValue, Text(ioc, "role"), Text(ioc, "context"), Text(ioc, "confidence"), Text(ioc, "basis"), article["id"]!, article["title"] ?? "", article["url"] ?? "", articleDate, vendors, industries, mitre, isApproved, expiresUtc);
+                    var record = new IocRecord(typeName, value, normalizedValue, effectiveRole, Text(ioc, "context"), Text(ioc, "confidence"), Text(ioc, "basis"), article["id"]!, article["title"] ?? "", article["url"] ?? "", articleDate, vendors, industries, mitre, isApproved, expiresUtc, overridden ? originalRole : null);
                     if (!Contains(vendors, vendor) || !Contains(industries, industry) || (!string.IsNullOrWhiteSpace(type) && !record.Type.Equals(type, StringComparison.OrdinalIgnoreCase))) continue;
                     if (!string.IsNullOrWhiteSpace(search) && !string.Join(' ', record.Type, record.Value, record.NormalizedValue, record.Role, record.Context, record.ArticleTitle, string.Join(' ', vendors), string.Join(' ', industries), string.Join(' ', mitre)).Contains(search, StringComparison.OrdinalIgnoreCase)) continue;
                     records.Add(record);
@@ -66,10 +73,46 @@ public static class IocIndex
         return records;
     }
 
+    public static bool IsActionableRole(string? role) => role?.Trim().Equals("malicious", StringComparison.OrdinalIgnoreCase) == true || role?.Trim().Equals("suspicious", StringComparison.OrdinalIgnoreCase) == true;
+
+    public static bool MatchesClassification(string? role, string? classification) => classification?.Trim().ToLowerInvariant() switch
+    {
+        null or "" or "all" => true,
+        "context" => !IsActionableRole(role),
+        "suspicious" => role?.Trim().Equals("suspicious", StringComparison.OrdinalIgnoreCase) == true,
+        "malicious" => role?.Trim().Equals("malicious", StringComparison.OrdinalIgnoreCase) == true,
+        _ => false
+    };
+
     public static string DismissalKey(string articleId, string type, string value) => $"{articleId}\u001f{type}\u001f{value}";
 
     public static void Approve(AppDatabase database, long articleId, string type, string value) =>
         database.Execute("INSERT OR IGNORE INTO ioc_approvals(article_id,ioc_type,ioc_value,approved_utc) VALUES(?,?,?,?)", articleId, type, value, DateTimeOffset.UtcNow.ToString("O"));
+
+    public static bool SetReviewedRole(AppDatabase database, long articleId, string? type, string? value, string? role)
+    {
+        if (role is not ("malicious" or "suspicious") || string.IsNullOrWhiteSpace(type) || string.IsNullOrWhiteSpace(value)) return false;
+        var json = database.Query("SELECT analysis_json FROM articles WHERE id=?", articleId).FirstOrDefault()?.GetValueOrDefault("analysis_json");
+        if (string.IsNullOrWhiteSpace(json)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (!document.RootElement.TryGetProperty("iocs", out var list) || list.ValueKind != JsonValueKind.Array) return false;
+            foreach (var item in list.EnumerateArray())
+            {
+                var actualType = Text(item, "type");
+                var actualValue = Text(item, "value");
+                if (!actualType.Equals(type, StringComparison.Ordinal) || !actualValue.Equals(value, StringComparison.Ordinal)) continue;
+                database.Execute("INSERT INTO ioc_role_overrides(article_id,ioc_type,ioc_value,role,updated_utc) VALUES(?,?,?,?,?) ON CONFLICT(article_id,ioc_type,ioc_value) DO UPDATE SET role=excluded.role,updated_utc=excluded.updated_utc", articleId, actualType, actualValue, role, DateTimeOffset.UtcNow.ToString("O"));
+                return true;
+            }
+        }
+        catch (JsonException) { }
+        return false;
+    }
+
+    public static void ResetReviewedRole(AppDatabase database, long articleId, string type, string value) =>
+        database.Execute("DELETE FROM ioc_role_overrides WHERE article_id=? AND ioc_type=? AND ioc_value=?", articleId, type, value);
 
     public static void ApproveArticle(AppDatabase database, long articleId, string? analysisJson)
     {
@@ -82,7 +125,7 @@ public static class IocIndex
             {
                 var type = Text(ioc, "type");
                 var value = Text(ioc, "value");
-                if (!string.IsNullOrWhiteSpace(type) && !string.IsNullOrWhiteSpace(value)) Approve(database, articleId, type, value);
+                if (Text(ioc, "role") is "malicious" or "suspicious" && !string.IsNullOrWhiteSpace(type) && !string.IsNullOrWhiteSpace(value)) Approve(database, articleId, type, value);
             }
         }
         catch (JsonException) { }

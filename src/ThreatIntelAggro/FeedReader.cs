@@ -5,7 +5,7 @@ using System.Xml;
 
 namespace ThreatIntelAggro;
 
-public sealed class FeedReader(HttpClient http, AppDatabase database, ILogger<FeedReader> log)
+public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, ILogger<FeedReader> log)
 {
     public async Task<int> RefreshAsync(long feedId, CancellationToken cancellationToken = default)
     {
@@ -14,18 +14,8 @@ public sealed class FeedReader(HttpClient http, AppDatabase database, ILogger<Fe
         var url = feed["url"]!;
         try
         {
-            await ValidatePublicUrlAsync(url, cancellationToken);
-            using var response = await GetFeedResponseAsync(url, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var bounded = new MemoryStream();
-            var buffer = new byte[16 * 1024];
-            int read;
-            while ((read = await stream.ReadAsync(buffer, cancellationToken)) > 0)
-            {
-                if (bounded.Length + read > 10 * 1024 * 1024) throw new InvalidOperationException("Feed exceeds the 10 MB size limit.");
-                bounded.Write(buffer, 0, read);
-            }
+            var bytes = await fetcher.GetAsync(url, 10 * 1024 * 1024, TimeSpan.FromSeconds(25), cancellationToken);
+            using var bounded = new MemoryStream(bytes);
             bounded.Position = 0;
             using var reader = XmlReader.Create(bounded, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 10_000_000 });
             var xml = XDocument.Load(reader);
@@ -67,51 +57,7 @@ public sealed class FeedReader(HttpClient http, AppDatabase database, ILogger<Fe
 
     private static string? Text(XElement? element) => element is null ? null : (element.HasElements ? string.Concat(element.DescendantNodes().OfType<XText>().Select(x => x.Value)) : element.Value).Trim();
 
-    private async Task<HttpResponseMessage> GetFeedResponseAsync(string address, CancellationToken cancellationToken)
-    {
-        var current = new Uri(address);
-        for (var hop = 0; hop <= 5; hop++)
-        {
-            await ValidatePublicUrlAsync(current.ToString(), cancellationToken);
-            using var request = new HttpRequestMessage(HttpMethod.Get, current);
-            var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is not null)
-            {
-                var destination = response.Headers.Location.IsAbsoluteUri ? response.Headers.Location : new Uri(current, response.Headers.Location);
-                response.Dispose();
-                current = destination;
-                continue;
-            }
-            return response;
-        }
-        throw new InvalidOperationException("Feed redirect limit exceeded.");
-    }
 
-    private static async Task ValidatePublicUrlAsync(string address, CancellationToken cancellationToken)
-    {
-        if (!Uri.TryCreate(address, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http") || !string.IsNullOrEmpty(uri.UserInfo))
-            throw new InvalidOperationException("Enter a valid public HTTP or HTTPS feed URL.");
-        if (IPAddress.TryParse(uri.Host, out var direct))
-        {
-            if (!IsPublic(direct)) throw new InvalidOperationException("Private and local network feed addresses are blocked.");
-            return;
-        }
-        var addresses = await Dns.GetHostAddressesAsync(uri.DnsSafeHost, cancellationToken);
-        if (addresses.Length == 0 || addresses.Any(address => !IsPublic(address)))
-            throw new InvalidOperationException("The feed host resolves to a private or local network address.");
-    }
-
-    private static bool IsPublic(IPAddress ip)
-    {
-        if (IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || ip.IsIPv6Multicast) return false;
-        var bytes = ip.MapToIPv6().GetAddressBytes();
-        if (ip.AddressFamily == AddressFamily.InterNetwork)
-        {
-            var v4 = ip.GetAddressBytes();
-            return !(v4[0] == 10 || v4[0] == 127 || (v4[0] == 169 && v4[1] == 254) || (v4[0] == 172 && v4[1] is >= 16 and <= 31) || (v4[0] == 192 && v4[1] == 168) || v4[0] == 0);
-        }
-        return !(bytes[0] == 0xfc || bytes[0] == 0xfd || bytes[0] == 0xff);
-    }
 }
 
 public sealed class FeedScheduler(IServiceScopeFactory scopes, AppDatabase database, ILogger<FeedScheduler> log) : BackgroundService

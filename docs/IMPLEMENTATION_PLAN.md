@@ -4,7 +4,7 @@ Planning baseline: 2026-11-13. This document describes the intended implementati
 
 ## 1. Agreed scope
 
-- One owner; private application with one local login.
+- One owner; private application with access controlled by the owner's Entra-enabled reverse proxy. The application does not implement human sign-in or user allowlisting.
 - Approximately 100 RSS/Atom feeds; refresh every few hours or daily.
 - Add, edit, pause, remove, and manually refresh feeds. Accept feed URLs later.
 - On addition, ingest entries from the preceding 14 days, as available in that feed.
@@ -77,7 +77,7 @@ flowchart TD
 4. Return the article contract in `DATA_CONTRACTS.md` using strict structured output where supported. Validate schema, references, formats, allowed enums, IOC types, and ATT&CK IDs locally before publishing results.
 5. Save JSON and relational projections in one transaction. Unsupported mappings remain empty; uncertain attribution is explicitly labeled as inferred.
 
-Model/effort are configurable independently per stage. Initial OpenAI default: `gpt-6-luna`, reasoning effort `max`, subject to a capability check against the configured account. Never silently replace an unavailable model. A setup page reports missing credentials/capabilities; ingestion and browsing still work without an AI key.
+The owner selects the model and reasoning effort in Settings, with an application default and optional independent overrides per AI step. Model names and effort values are not fixed in analysis request code. Existing installations retain their effective configuration on migration; new installations require an explicit, validated selection before AI processing starts. Never silently replace an unavailable model. Settings reports missing credentials/capabilities; ingestion and browsing still work without an AI key. See the AI configuration plan below.
 
 ### AI stage 2: detection generation
 
@@ -173,6 +173,26 @@ Use a compact dark interface with accessible contrast, keyboard focus, responsiv
 
 Read state is explicit: opening an article never marks it read. Include bulk mark read/unread with a clear selection count. Single-owner states need no multi-user schema now.
 
+### AI model and reasoning effort settings (planned 2026-11-15)
+
+Add an **AI configuration** panel to the existing Settings page. The owner can change the model and effort without editing source, environment variables, or Compose files, and without restarting the application.
+
+- Show a default model selector and a reasoning-effort selector. Include a provider-default effort choice that omits the explicit effort parameter when appropriate. Explain that effort can affect latency and token use.
+- Populate model choices from the configured provider/account where discovery is available, with a refresh action and an explicit model-ID entry option for models or Azure deployments discovery cannot enumerate. A successful model listing alone does not establish compatibility with this application's requests.
+- Offer only effort choices whose support has been established for the selected model/deployment. Keep capability information in the provider adapter, separate from analysis orchestration; verify it against provider documentation and explicit setup checks rather than assuming every listed model accepts the same efforts. Mark unknown or incompatible selections clearly and never silently substitute a model or effort.
+- Keep the common case to one default pair. Under advanced settings, allow separate overrides for **Research**, **Article analysis**, **Detection generation**, and **KQL repair**. Each override can inherit the default pair. These correspond to the current `research`, `article-analysis`, `detection-generation`, and `kql-repair-*` calls in `AnalysisService`.
+- Show the effective model/effort for each step, credential-presence status, compatibility status, and field-specific validation errors. Saving is a local operation; any check that sends a billable generation request must be an explicit action labeled accordingly. Invalid input leaves the last saved configuration intact and preserves the submitted form values for correction.
+
+Implementation sequence:
+
+1. **Central settings service and persistence.** Introduce a typed AI settings service backed by the existing SQLite `app_settings` table, with an atomic save and a configuration revision. Keep provider credentials in the existing secret configuration. On first upgrade only, import effective `OpenAI:Model`, `OpenAI:ReasoningEffort`, `OpenAI:ResearchEffort`, `OpenAI:AnalysisEffort`, and `OpenAI:RepairEffort` values, including the current code fallbacks when absent. Map `AnalysisEffort` to both article analysis and detection generation. Persist the imported values so subsequent Settings changes take precedence over deployment configuration. Fresh installations remain unconfigured until a model/effort selection is saved.
+2. **Settings form and validation.** Extend `Pages/Settings.cshtml` and its page model with the selectors, optional step overrides, refresh/check actions, and antiforgery-protected save handler. Reuse the existing responsive form styling. Validate model identifiers, effort values, and known capability constraints on the server as well as in the UI. Model discovery failures must leave saved choices visible and unchanged.
+3. **Analysis integration.** Replace direct model/effort reads and inline fallback strings in `AnalysisService` with the settings service. Snapshot the effective configuration and revision when a new article analysis begins, persist that snapshot, and use it for every step, repair, and retry of that analysis. Saving settings affects analyses that have not begun; it does not switch an active analysis midway, resubmit an accepted background response, invalidate completed stage results, or reanalyze completed articles. For an analysis already in progress during upgrade, preserve known request metadata and seed missing snapshot values from the imported legacy configuration without resubmitting existing responses.
+4. **Run provenance and errors.** Persist the requested provider/model/effort and configuration revision with each AI request, plus the actual returned model when available. Capability or provider rejection must produce an actionable configuration error with a link to Settings; never fall back to a different selection. Preserve existing resumable response IDs and cached stage results.
+5. **Documentation and focused verification.** Document Settings as the normal configuration path and environment variables as migration/bootstrap input only. Add fixture-based tests for persistence across restart, configuration precedence, legacy import, all four step overrides, invalid/unsupported values, request serialization including omitted provider-default effort, and an in-progress analysis retaining its snapshot after a settings change. Verify the Settings save/reload flow and responsive layout locally without paid API calls.
+
+Acceptance: select a different compatible model and effort in Settings, save, reload, and restart the app; the next new analysis uses the saved selection in every applicable request and records it in run metadata. Advanced overrides apply only to their designated steps. Existing analyses retain their saved configuration, and an unavailable selection produces a visible error instead of a silent replacement. The analysis request builder contains no fixed model name or effort fallback.
+
 Detection review status: `new`, `reviewing`, `accepted`, `rejected`, `implemented`. Archive is an independent timestamp, so implemented/rejected status survives archive/restore. The owner can change status without a rigid sequence. Implemented is a manual assertion, not proof of deployment or a tenant API call. Optional implementation URL/date and tenant-test notes may be recorded.
 
 Allow notes, tags, bookmarks, and deliberate correction of JSON/KQL. Form edits must pass the same local contract checks as AI output. Export effective article/detection JSON, current filtered lists as CSV, and individual queries as `.kql` and XDRConverter-compatible `.yaml`; protect CSV text cells from formula execution. Include prominent clickable provenance links. YAML is generated from the effective saved detection on demand so edits cannot leave a stale sidecar file.
@@ -189,7 +209,9 @@ Deletion is explicit and confirmed with the affected scope. Article deletion rem
 - One Compose service, one persistent volume, `restart: unless-stopped`, HTTP health check, graceful cancellation/shutdown, and documented UID/file permissions. No companion database, scheduler, or queue container.
 - Initial sizing target: 1 vCPU and 1–2 GB RAM, to be measured using realistic backfill/PDF fixtures. Bound document sizes and retain the single AI worker to avoid memory spikes.
 - Prefer an existing reverse proxy for TLS. Default published port binds to loopback; document explicit LAN/VPN exposure. No automatic public publishing.
-- One owner is created by a deliberate setup command; no default password. Use ASP.NET Core cookie authentication, built-in password hashing, antiforgery, login rate limiting, and persisted Data Protection keys under `/data`.
+- Process forwarded client IP and scheme headers only from explicitly configured proxy IPs, with a one-hop limit. In Docker, document the proxy address visible to the app container (often the bridge gateway when NGINX runs on the host); do not trust arbitrary forwarded headers or broad networks.
+- Human sign-in and user allowlisting are handled by the hosting environment or reverse proxy. That layer must protect every UI route, including Settings. The application does not consume Entra tokens or require an Entra client secret. Keep antiforgery protection for Razor form posts and persist Data Protection keys under `/data`.
+- Require a generated high-entropy bearer key for every `/api/*` route. Generate and rotate it in Settings, store only its SHA-256 hash, show each new key once, and accept the prior key for up to 24 hours after rotation. Keep `/health` unauthenticated for container health checks; never accept API keys in query strings.
 - Provide `.env.example` with placeholders. Credentials come from environment variables or mounted secret files, never stored in the Git repo, article records, exports, or logs. Provider keys are entered operationally, not revealed in settings.
 - Data layout: `/data/aggro.db`, `/data/evidence/`, `/data/keys/`, `/data/backups/`. Evidence uses hashes and explicit ownership links for safe garbage collection after manual deletion.
 - No automatic age-based deletion of intelligence or retained evidence. Show disk usage and stop new retrieval cleanly if storage is exhausted.
@@ -252,7 +274,7 @@ Implement feed CRUD, pause/refresh, six-hour default scheduling, two-week availa
 
 ### D. Structured intelligence
 
-Implement evidence snapshots, bounded research tools, strict schemas, normalization/projections, article detail and JSON/CSV export. Test grounded IOC/context separation, unknown actors remaining unknown, industry/vendor roles, non-English text, truncated PDFs, unsupported content, refusal/incomplete JSON, retries, quota blocking, and prompt-injection fixtures. Verify configured search/file/tool limits cannot be bypassed by model instructions.
+Implement the Settings-based AI configuration plan in section 7 before extending AI processing. Then implement evidence snapshots, bounded research tools, strict schemas, normalization/projections, article detail and JSON/CSV export. Test grounded IOC/context separation, unknown actors remaining unknown, industry/vendor roles, non-English text, truncated PDFs, unsupported content, refusal/incomplete JSON, retries, quota blocking, and prompt-injection fixtures. Verify configured search/file/tool limits cannot be bypassed by model instructions.
 
 ### E. Detection workbench
 

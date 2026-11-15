@@ -1,12 +1,11 @@
 services:
   threat-intel-aggro:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/f-bader/threatintelaggro:${AGGRO_IMAGE_TAG:-latest}
     ports:
       - "127.0.0.1:5088:8080"
     environment:
       AGGRO_DATA_DIR: /data
+      AGGRO_TRUSTED_PROXY_IPS: ${AGGRO_TRUSTED_PROXY_IPS:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ASPNETCORE_ENVIRONMENT: Production
     volumes:

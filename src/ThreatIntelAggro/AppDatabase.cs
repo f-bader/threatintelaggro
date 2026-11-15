@@ -3,7 +3,7 @@ using System.Text;
 
 namespace ThreatIntelAggro;
 
-public sealed class AppDatabase
+public sealed class AppDatabase : IDisposable
 {
     private readonly string _path;
     private readonly object _gate = new();
@@ -32,12 +32,17 @@ public sealed class AppDatabase
                     feed_title TEXT NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
                     published_utc TEXT, first_seen_utc TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0,
                     ai_status TEXT NOT NULL DEFAULT 'pending', ai_error TEXT,
-                    content_text TEXT NOT NULL DEFAULT '', analysis_json TEXT, analyzed_utc TEXT,
+                    content_text TEXT NOT NULL DEFAULT '', analysis_json TEXT, analyzed_utc TEXT, evidence_verified INTEGER NOT NULL DEFAULT 0,
                     source_ledger_json TEXT NOT NULL DEFAULT '[]',
                     category TEXT NOT NULL DEFAULT 'Existing Research', category_manual INTEGER NOT NULL DEFAULT 0,
                     UNIQUE(feed_title, url)
                 );
                 CREATE INDEX IF NOT EXISTS ix_articles_published ON articles(published_utc DESC);
+                CREATE TABLE IF NOT EXISTS source_snapshots (
+                    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                    source_id TEXT NOT NULL, content TEXT NOT NULL,
+                    PRIMARY KEY(article_id,source_id)
+                );
                 CREATE TABLE IF NOT EXISTS analysis_responses (
                     article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
                     stage_key TEXT NOT NULL, response_id TEXT, status TEXT NOT NULL DEFAULT 'submitting',
@@ -56,6 +61,11 @@ public sealed class AppDatabase
                 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ioc_exclusions (id INTEGER PRIMARY KEY AUTOINCREMENT,value TEXT NOT NULL UNIQUE,created_utc TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ioc_dismissals (article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,ioc_type TEXT NOT NULL,ioc_value TEXT NOT NULL,dismissed_utc TEXT NOT NULL,PRIMARY KEY(article_id,ioc_type,ioc_value));
+                CREATE TABLE IF NOT EXISTS ioc_role_overrides (
+                    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                    ioc_type TEXT NOT NULL,ioc_value TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('malicious','suspicious')),
+                    updated_utc TEXT NOT NULL,PRIMARY KEY(article_id,ioc_type,ioc_value)
+                );
                 CREATE TABLE IF NOT EXISTS ioc_approvals (article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,ioc_type TEXT NOT NULL,ioc_value TEXT NOT NULL,approved_utc TEXT NOT NULL,PRIMARY KEY(article_id,ioc_type,ioc_value));
                 CREATE INDEX IF NOT EXISTS ix_detections_created ON detections(created_utc DESC);
                 """);
@@ -66,6 +76,7 @@ public sealed class AppDatabase
                 "ALTER TABLE articles ADD COLUMN ai_error TEXT",
                 "ALTER TABLE articles ADD COLUMN content_text TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE articles ADD COLUMN analysis_json TEXT",
+                "ALTER TABLE articles ADD COLUMN evidence_verified INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE articles ADD COLUMN analyzed_utc TEXT",
                 "ALTER TABLE articles ADD COLUMN source_ledger_json TEXT NOT NULL DEFAULT '[]'",
                 "ALTER TABLE articles ADD COLUMN category TEXT NOT NULL DEFAULT 'Existing Research'",
@@ -125,10 +136,31 @@ public sealed class AppDatabase
         }
     }
 
+    public void Transaction(Action action)
+    {
+        lock (_gate)
+        {
+            Exec("BEGIN IMMEDIATE");
+            try { action(); Exec("COMMIT"); }
+            catch { Exec("ROLLBACK"); throw; }
+        }
+    }
+
     public int ScalarInt(string sql, params object?[] args)
     {
         var result = Query(sql, args).FirstOrDefault()?.Values.FirstOrDefault();
         return int.TryParse(result, out var value) ? value : 0;
+    }
+
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_handle == IntPtr.Zero) return;
+            var status = Native.sqlite3_close(_handle);
+            if (status != 0) throw Error(status);
+            _handle = IntPtr.Zero;
+        }
     }
 
     private IntPtr _handle;

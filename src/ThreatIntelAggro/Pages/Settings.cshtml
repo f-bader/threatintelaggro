@@ -5,6 +5,27 @@
 }
 <div class="page-heading"><div><div class="eyebrow">LOCAL CONTROLS / IOC HYGIENE</div><h1>Settings</h1><p class="subhead">Manage indicator exclusions applied across results and exports.</p></div><a class="button button-secondary" asp-page="/Index">← &nbsp;Back to inbox</a></div>
 @if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
+<section class="panel api-access-panel">
+  <div class="panel-head">
+    <div><div class="eyebrow">MACHINE ACCESS</div><h2>IOC API key</h2></div>
+    <span class="api-key-status @(Model.ApiKeyActive ? "is-active" : "is-missing")">@(Model.ApiKeyActive ? "ACTIVE" : "NOT CREATED")</span>
+  </div>
+  <div class="api-access-content">
+    <div class="api-access-copy">
+      <p class="api-access-description">Call the fixed endpoint with this key in the request’s Authorization header.</p>
+      <div class="api-key-usage"><span>ENDPOINT</span><code>GET /api/iocs</code><span>HEADER</span><code>Authorization: Bearer &lt;key&gt;</code></div>
+      @if (!string.IsNullOrWhiteSpace(Model.ApiKeyLastRotatedUtc) && DateTimeOffset.TryParse(Model.ApiKeyLastRotatedUtc, out var rotated)) {
+        <div class="api-key-meta"><span class="api-key-meta-label">LAST ROTATED</span><time>@rotated.ToLocalTime().ToString("dd MMM yyyy · HH:mm")</time><span class="api-key-grace">Previous key remains valid for 24 hours after rotation.</span></div>
+      }
+      @if (!string.IsNullOrWhiteSpace(Model.GeneratedApiKey)) {
+        <label class="api-key-generated-label" for="generated-api-key">NEW KEY · COPY IT NOW</label>
+        <div class="api-key-generated"><code id="generated-api-key">@Model.GeneratedApiKey</code><button class="small-action" type="button" data-copy-target="generated-api-key">COPY</button></div>
+      }
+    </div>
+    <form method="post" asp-page-handler="RotateApiKey"><button class="button button-primary" type="submit">@(Model.ApiKeyActive ? "ROTATE API KEY" : "GENERATE API KEY")</button></form>
+  </div>
+  <p class="api-access-footer">Only a one-way hash is stored. The key is shown once after generation. <code>/health</code> does not require a key.</p>
+</section>
 <section class="panel add-feed-panel ioc-exclusion-panel"><div class="panel-head"><div><div class="eyebrow">IOC QUALITY CONTROLS</div><h2>IOC exclusions <span class="count-chip">@Model.IocExclusions.Count</span></h2></div><span class="quiet-label">FILTERED FROM RESULTS, CSV, AND API</span></div>
 <form method="post" asp-page-handler="ToggleM365" class="m365-exclusion-form"><label><input type="checkbox" name="enabled" value="true" checked="@(Model.ExcludeM365)"/><span><strong>Exclude Microsoft 365 URLs and IP address ranges</strong><small>Official Microsoft endpoint data refreshes daily. @(DateTimeOffset.TryParse(Model.M365RefreshedUtc, out var m365Updated) ? $"Last refreshed {m365Updated.ToLocalTime():dd MMM yyyy · HH:mm}." : "Endpoint list is waiting for its first refresh.")</small></span></label><button class="small-action" type="submit">SAVE</button></form>
 @if (!string.IsNullOrWhiteSpace(Model.M365RefreshError)) { <p class="m365-error" title="@Model.M365RefreshError">Microsoft 365 endpoint refresh issue: @Model.M365RefreshError</p> }
@@ -24,3 +45,16 @@
 <label>Certificate thumbprints<input asp-for="CertificateExpiryDays" type="number" min="0" max="3650" required/></label>
 <label>Other / generic indicators<input asp-for="OtherExpiryDays" type="number" min="0" max="3650" required/></label>
 <button class="button button-primary" type="submit">SAVE LIFETIMES</button></form><p class="form-footnote">Defaults: IPs and URLs 90 days; domains, hashes, emails, software IDs, file and host artifacts 365 days; certificate thumbprints 730 days. Other types use 365 days. Set any value to 0 to disable expiry for that type. Changes affect current results and API responses immediately.</p></section>
+
+@section Scripts {
+<script>
+  document.querySelector('[data-copy-target]')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const target = document.getElementById(button.dataset.copyTarget);
+    if (!target) return;
+    await navigator.clipboard.writeText(target.textContent.trim());
+    button.textContent = 'COPIED';
+    setTimeout(() => button.textContent = 'COPY', 1800);
+  });
+</script>
+}

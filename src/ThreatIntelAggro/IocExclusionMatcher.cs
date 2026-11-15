@@ -124,7 +124,11 @@ public sealed class IocExclusionMatcher
         if (address.AddressFamily != network.AddressFamily)
         {
             if (address.IsIPv4MappedToIPv6 && network.AddressFamily == AddressFamily.InterNetwork) address = address.MapToIPv4();
-            else if (network.IsIPv4MappedToIPv6 && address.AddressFamily == AddressFamily.InterNetwork) network = network.MapToIPv4();
+            else if (network.IsIPv4MappedToIPv6 && address.AddressFamily == AddressFamily.InterNetwork)
+            {
+                // Compare in IPv6 space so prefixes shorter than /96 retain their meaning.
+                address = address.MapToIPv6();
+            }
             else return false;
         }
         var addressBytes = address.GetAddressBytes();

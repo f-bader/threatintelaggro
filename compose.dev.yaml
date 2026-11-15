@@ -1,0 +1,6 @@
+services:
+  threat-intel-aggro:
+    image: threat-intel-aggro:local
+    build:
+      context: .
+      dockerfile: Dockerfile
