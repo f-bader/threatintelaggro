@@ -33,7 +33,7 @@
       <a class="console-tab @(ViewData["Title"]?.ToString() == "Feeds" ? "active" : "")" asp-page="/Feeds"><span class="tab-label">SOURCES</span><span class="tab-count">@feedCount</span></a>
       <a class="console-tab @(ViewData["Title"]?.ToString() == "IOCs" ? "active" : "")" asp-page="/Iocs"><span class="tab-label">IOCS</span><span class="tab-count">@iocCount</span></a>
       <a class="console-tab @(ViewData["Title"]?.ToString() == "Settings" ? "active" : "")" asp-page="/Settings"><span class="tab-label">SETTINGS</span></a>
-      <a class="console-tab diagnostics-tab @(ViewData["Title"]?.ToString() == "Diagnostics" ? "active" : "")" asp-page="/Diagnostics"><span class="tab-label desktop-only">DIAGNOSTICS</span><span class="tab-label mobile-only">LOGS</span></a>
+      @if (IocExclusionSettings.Get(Database, "diagnostics_visible") == "true") { <a class="console-tab diagnostics-tab @(ViewData["Title"]?.ToString() == "Diagnostics" ? "active" : "")" asp-page="/Diagnostics"><span class="tab-label desktop-only">DIAGNOSTICS</span><span class="tab-label mobile-only">LOGS</span></a> }
       <div class="tab-rule"></div>
     </nav>
     <div class="console-content">@RenderBody()</div>

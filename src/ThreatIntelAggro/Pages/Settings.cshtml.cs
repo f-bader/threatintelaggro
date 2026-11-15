@@ -12,10 +12,12 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
     public string BriefingTimeUtc { get; private set; } = "06:00";
     public string BriefingPrompt { get; private set; } = BriefingService.DefaultPrompt;
     public bool BriefingFeedActive { get; private set; }
+    public bool DiagnosticsVisible { get; private set; }
     [TempData] public string? GeneratedBriefingFeedUrl { get; set; }
     [BindProperty] public string FollowKind { get; set; } = "vendor";
     [BindProperty] public string FollowName { get; set; } = "";
     [BindProperty] public bool BriefingEnabledInput { get; set; } = true;
+    [BindProperty] public bool DiagnosticsVisibleInput { get; set; }
     [BindProperty] public string BriefingTimeInput { get; set; } = "06:00";
     [BindProperty] public string? BriefingPromptInput { get; set; } = BriefingService.DefaultPrompt;
     public IReadOnlyList<Dictionary<string, string?>> IocExclusions { get; private set; } = [];
@@ -175,6 +177,13 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
         return RedirectToPage();
     }
 
+    public IActionResult OnPostSaveDiagnosticsVisibility()
+    {
+        IocExclusionSettings.Set(database, "diagnostics_visible", DiagnosticsVisibleInput ? "true" : "false");
+        Notice = DiagnosticsVisibleInput ? "Diagnostics tab enabled." : "Diagnostics tab hidden.";
+        return RedirectToPage();
+    }
+
     public IActionResult OnPostSaveIocExpiry()
     {
         var values = new[] { IpExpiryDays, DomainExpiryDays, HashExpiryDays, UrlExpiryDays, EmailExpiryDays, SoftwareIdExpiryDays, FileArtifactExpiryDays, HostArtifactExpiryDays, CertificateExpiryDays, OtherExpiryDays };
@@ -232,6 +241,8 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
         BriefingPrompt = BriefingService.ResolvePrompt(IocExclusionSettings.Get(database, "briefing_prompt"));
         BriefingEnabledInput = BriefingEnabled; BriefingTimeInput = BriefingTimeUtc; if (!preserveAiInput) BriefingPromptInput = BriefingPrompt;
         BriefingFeedActive = !string.IsNullOrWhiteSpace(IocExclusionSettings.Get(database, "briefing_rss_hash"));
+        DiagnosticsVisible = IocExclusionSettings.Get(database, "diagnostics_visible") == "true";
+        DiagnosticsVisibleInput = DiagnosticsVisible;
         ApiKeyConfigured = !string.IsNullOrWhiteSpace(configuration["OpenAI:ApiKey"] ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
         CurrentAiSettings = aiModelSettings.Read();
         if (!preserveAiInput)
