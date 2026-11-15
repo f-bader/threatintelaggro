@@ -254,13 +254,13 @@ h2 { margin: 3px 0 0; color: #dbe2e9; font: 700 16px var(--sans); letter-spacing
 .ioc-expiry-panel .form-footnote { margin: 0; padding: 4px 17px 14px; }
 .ai-settings-panel .panel-head .eyebrow { color: #83d5e2; }
 .ai-settings-status { padding-top: 12px; }
-.ai-settings-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; padding: 8px 17px 14px; }
-.ai-settings-form label { display: grid; gap: 5px; min-width: 0; color: #93a0ae; font: 9px var(--mono); }
+.ai-settings-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 12px; padding: 8px 17px 14px; }
+.ai-settings-form label { display: grid; align-content: start; gap: 5px; min-width: 0; color: #93a0ae; font: 9px var(--mono); }
 .ai-settings-form input,.ai-settings-form select { width: 100%; min-width: 0; height: 34px; padding: 0 9px; border: 1px solid #303a46; background: #0b1016; color: #c2ccd6; font: 10px var(--mono); }
 .ai-settings-form label small { color: #71808d; font-size: 8px; text-transform: none; }
 .ai-stage-overrides { grid-column: 1/-1; min-width: 0; padding: 11px; border: 1px solid var(--line); background: #0c1117; color: #93a0ae; font: 9px var(--mono); }
 .ai-stage-overrides summary { cursor: pointer; color: #83d5e2; letter-spacing: 1px; }
-.ai-stage-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; padding-top: 12px; }
+.ai-stage-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 10px; padding-top: 12px; }
 .ai-settings-form .validation { grid-column: 1/-1; color: #e59a91; font: 10px var(--mono); }
 .ai-settings-form .button { justify-self: start; }
 .ai-model-refresh { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 0 17px 13px; color: #778492; font: 9px var(--mono); }
