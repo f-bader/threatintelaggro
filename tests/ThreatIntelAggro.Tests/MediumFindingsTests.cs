@@ -69,6 +69,70 @@ public sealed class MediumFindingsTests
         Assert.NotEqual(article["published_utc"], article["first_seen_utc"]);
     }
 
+    [Fact]
+    public void FeedListingFiltersAndSortsEveryDataColumnWithStableNullHandling()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        db.Execute("INSERT INTO feeds(title,url,interval_hours,enabled,ioc_auto_approve,last_checked_utc,last_error,created_utc) VALUES(?,?,?,?,?,?,?,?)", "Alpha Research", "https://alpha.example/feed", 6, 1, 1, "2026-11-12T12:00:00Z", null, now);
+        db.Execute("INSERT INTO feeds(title,url,interval_hours,enabled,ioc_auto_approve,last_checked_utc,last_error,created_utc) VALUES(?,?,?,?,?,?,?,?)", "Bravo Security", "https://bravo.example/feed", 3, 1, 0, "2026-11-14T12:00:00Z", "timeout", now);
+        db.Execute("INSERT INTO feeds(title,url,interval_hours,enabled,ioc_auto_approve,last_checked_utc,last_error,created_utc) VALUES(?,?,?,?,?,?,?,?)", "Charlie Intel", "https://charlie.example/feed", 12, 0, 0, null, null, now);
+        db.Execute("INSERT INTO articles(feed_id,feed_title,title,url,first_seen_utc,ai_status) VALUES(?,?,?,?,?,?)", 1, "Alpha Research", "A1", "https://alpha.example/a1", now, "pending");
+        db.Execute("INSERT INTO articles(feed_id,feed_title,title,url,first_seen_utc,ai_status) VALUES(?,?,?,?,?,?)", 1, "Alpha Research", "A2", "https://alpha.example/a2", now, "pending");
+        db.Execute("INSERT INTO articles(feed_id,feed_title,title,url,first_seen_utc,ai_status) VALUES(?,?,?,?,?,?)", 3, "Charlie Intel", "C1", "https://charlie.example/c1", now, "pending");
+
+        FeedsModel Listing(string sort = "name", string direction = "asc") => new(db, null!) { Sort = sort, Direction = direction };
+        string[] Titles(FeedsModel page) { page.OnGet(); return page.Feeds.Select(x => x["title"]!).ToArray(); }
+
+        Assert.Equal(["Alpha Research", "Bravo Security", "Charlie Intel"], Titles(Listing()));
+        Assert.Equal(["Charlie Intel", "Bravo Security", "Alpha Research"], Titles(Listing("name", "desc")));
+        Assert.Equal(["Bravo Security", "Alpha Research", "Charlie Intel"], Titles(Listing("cadence")));
+        Assert.Equal(["Alpha Research", "Charlie Intel", "Bravo Security"], Titles(Listing("articles", "desc")));
+        Assert.Equal(["Bravo Security", "Alpha Research", "Charlie Intel"], Titles(Listing("checked", "desc")));
+        Assert.Equal(["Bravo Security", "Alpha Research", "Charlie Intel"], Titles(Listing("status")));
+
+        var filtered = Listing();
+        filtered.Status = "unreachable";
+        filtered.Cadence = "3";
+        filtered.IocApproval = "disabled";
+        filtered.Search = "BRAVO.EXAMPLE";
+        Assert.Equal(["Bravo Security"], Titles(filtered));
+        Assert.Equal(3, filtered.TotalFeedCount);
+
+        var invalid = Listing("title; DROP TABLE feeds", "sideways");
+        Assert.Equal(["Alpha Research", "Bravo Security", "Charlie Intel"], Titles(invalid));
+        Assert.Equal("name", invalid.Sort);
+        Assert.Equal("asc", invalid.Direction);
+    }
+
+    [Fact]
+    public void FeedActionsRedirectWithCurrentFilterAndSortState()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        db.Execute("INSERT INTO feeds(title,url,created_utc) VALUES(?,?,?)", "Feed", "https://example.test/feed", DateTimeOffset.UtcNow.ToString("O"));
+        var page = new FeedsModel(db, null!)
+        {
+            Search = "example",
+            Status = "active",
+            Cadence = "6",
+            IocApproval = "enabled",
+            Sort = "articles",
+            Direction = "desc"
+        };
+
+        var result = Assert.IsType<RedirectToPageResult>(page.OnPostToggle(1));
+
+        Assert.Equal("/Feeds", result.PageName);
+        Assert.Equal("example", result.RouteValues!["search"]);
+        Assert.Equal("active", result.RouteValues["status"]);
+        Assert.Equal("6", result.RouteValues["cadence"]);
+        Assert.Equal("enabled", result.RouteValues["iocApproval"]);
+        Assert.Equal("articles", result.RouteValues["sort"]);
+        Assert.Equal("desc", result.RouteValues["direction"]);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("192.0.2.15")]
