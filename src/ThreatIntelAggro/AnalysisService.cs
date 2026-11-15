@@ -19,6 +19,19 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
         db.Execute("UPDATE articles SET ai_status='pending',ai_error=NULL WHERE id=? AND ai_status IN ('pending','failed')", articleId);
     }
 
+    public bool QueueReanalysis(long articleId)
+    {
+        var queued = false;
+        db.Transaction(() =>
+        {
+            if (db.ScalarInt("SELECT COUNT(*) FROM articles WHERE id=? AND ai_status='analyzed'", articleId) != 1) return;
+            db.Execute("DELETE FROM analysis_responses WHERE article_id=?", articleId);
+            db.Execute("UPDATE articles SET ai_status='pending',ai_error=NULL WHERE id=?", articleId);
+            queued = true;
+        });
+        return queued;
+    }
+
     public async Task<bool> AnalyzeOneAsync(long? requestedId = null, CancellationToken ct = default)
     {
         if (!await _gate.WaitAsync(0, ct)) return false;

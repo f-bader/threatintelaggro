@@ -135,6 +135,12 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
         return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category, sort });
     }
 
+    public IActionResult OnPostReanalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
+    {
+        analyzer.QueueReanalysis(id);
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category, sort });
+    }
+
     public IActionResult OnPostAdHocAnalyze()
     {
         AdHocUrl = AdHocUrl.Trim();

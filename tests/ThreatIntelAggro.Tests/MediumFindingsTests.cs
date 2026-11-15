@@ -389,6 +389,38 @@ public sealed class MediumFindingsTests
     }
 
     [Fact]
+    public void ReanalysisClearsStageCacheAndQueuesWithoutDiscardingCurrentResult()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        const string oldAnalysis = "{\"old\":true}";
+        const string oldLedger = "old-ledger";
+        const string savedConfig = "{\"model\":\"saved-model\",\"effort\":\"high\"}";
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,analysis_json,source_ledger_json,ai_status,ai_error) VALUES(?,?,?,?,?,?,?,'analyzed','old error')", "Fixture", "Fixture", "https://example.org/", "Fixture summary", now, oldAnalysis, oldLedger);
+        db.Execute("INSERT INTO article_ai_config(article_id,config_json) VALUES(1,?)", savedConfig);
+        db.Execute("INSERT INTO analysis_responses(article_id,stage_key,status,result_text,updated_utc) VALUES(1,'research','completed','cached research',?)", now);
+        db.Execute("INSERT INTO detections(article_id,local_key,alert_title,kql,status,archived,guid,created_utc,updated_utc) VALUES(1,'reviewed','Reviewed detection','Old query','accepted',0,'guid',?,?)", now, now);
+        using var http = new HttpClient(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
+        using var fetcher = new SafePublicFetcher(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
+        var config = new ConfigurationBuilder().Build();
+        var settings = new AiModelSettingsService(db, config);
+        var service = new AnalysisService(http, fetcher, db, config, NullLogger<AnalysisService>.Instance, settings);
+
+        Assert.True(service.QueueReanalysis(1));
+
+        var article = db.Query("SELECT ai_status,ai_error,analysis_json,source_ledger_json FROM articles WHERE id=1")[0];
+        Assert.Equal("pending", article["ai_status"]);
+        Assert.Null(article["ai_error"]);
+        Assert.Equal(oldAnalysis, article["analysis_json"]);
+        Assert.Equal(oldLedger, article["source_ledger_json"]);
+        Assert.Equal(0, db.ScalarInt("SELECT COUNT(*) FROM analysis_responses WHERE article_id=1"));
+        Assert.Equal(savedConfig, db.Query("SELECT config_json FROM article_ai_config WHERE article_id=1")[0]["config_json"]);
+        Assert.Equal("accepted", db.Query("SELECT status FROM detections WHERE article_id=1 AND local_key='reviewed'")[0]["status"]);
+        Assert.False(service.QueueReanalysis(1));
+    }
+
+    [Fact]
     public void AiSettingsPersistDefaultsOverridesAndRevision()
     {
         using var fixture = DatabaseFixture.Create();
