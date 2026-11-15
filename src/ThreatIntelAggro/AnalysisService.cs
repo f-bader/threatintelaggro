@@ -80,6 +80,13 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
                 var research = await CallModelAsync(key, researchInstructions, researchInput, ResearchSchema(), useSearch: true, ct, id, stageKey: "research", requireSearch: !articleFetched);
                 rawOutput = research;
                 var citations = db.Query("SELECT search_citations_json FROM analysis_responses WHERE article_id=? AND stage_key='research'", id).FirstOrDefault()?["search_citations_json"] ?? "[]";
+                if (!articleFetched)
+                {
+                    currentStage = "article-search-citations"; rawOutput = null;
+                    await CallModelAsync(key, "Use web search to open this exact original article URL. State briefly whether the original article is available in search, quote up to three short exact passages if it is, and cite the original URL in the response. If the page is not found, say so. Do not rely on related articles for this check.", JsonSerializer.Serialize(new { title = row["title"], url = articleUrl, publisher = row["feed_title"] }), new JsonObject(), useSearch: true, ct, id, stageKey: "article-search-citations", requireSearch: true, useStructuredOutput: false);
+                    var citationProbe = db.Query("SELECT search_citations_json FROM analysis_responses WHERE article_id=? AND stage_key='article-search-citations'", id).FirstOrDefault()?["search_citations_json"] ?? "[]";
+                    citations = MergeSearchCitations(citations, citationProbe);
+                }
                 var searchExcerpts = BuildSearchExcerptSources(research, citations);
                 var refs = NormalizeReferences(research, articleUrl);
                 foreach (var reference in refs.Take(8))
@@ -130,7 +137,7 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
                 if (!articleFetched)
                 {
                     var articleCitations = db.Query("SELECT search_citations_json FROM analysis_responses WHERE article_id=? AND stage_key='article-analysis'", id).FirstOrDefault()?["search_citations_json"] ?? "[]";
-                    var articleExcerpts = BuildSearchExcerptSources(articleResponse, articleCitations).Where(x => SameUrl(x.Url, articleUrl));
+                    var articleExcerpts = BuildSearchExcerptSources(articleResponse, MergeSearchCitations(citations, articleCitations)).Where(x => SameUrl(x.Url, articleUrl));
                     AddSearchExcerptSources(allSources, sourceByUrl, articleExcerpts);
                     sourceLedger = CreateSourceLedger(allSources);
                     var responseNode = JsonNode.Parse(articleResponse)?.AsObject() ?? throw new InvalidOperationException("Fallback article analysis returned invalid JSON.");
@@ -229,7 +236,7 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
 
     public static string ExportYaml(Dictionary<string, string?> detection) => DetectionYaml.Export(detection);
 
-    private async Task<string> CallModelAsync(string key, string instructions, string input, JsonObject schema, bool useSearch, CancellationToken ct, long articleId = 0, string stageKey = "", bool requireSearch = false)
+    private async Task<string> CallModelAsync(string key, string instructions, string input, JsonObject schema, bool useSearch, CancellationToken ct, long articleId = 0, string stageKey = "", bool requireSearch = false, bool useStructuredOutput = true)
     {
         if (articleId <= 0 || string.IsNullOrWhiteSpace(stageKey)) throw new ArgumentException("Background analysis stage identity is required.");
         var snapshot = db.Query("SELECT config_json FROM article_ai_config WHERE article_id=?", articleId).FirstOrDefault()?["config_json"]
@@ -237,7 +244,8 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
         var (model, effort) = AiModelSettingsService.FromSnapshot(snapshot).ForStage(stageKey);
         var existing = db.Query("SELECT response_id,status,result_text,search_citations_json FROM analysis_responses WHERE article_id=? AND stage_key=?", articleId, stageKey).FirstOrDefault();
         var reusable = existing?["status"] == "completed" && !string.IsNullOrWhiteSpace(existing["result_text"]) &&
-            (!requireSearch || !string.IsNullOrWhiteSpace(existing["search_citations_json"]) && existing["search_citations_json"] != "[]");
+            (!requireSearch || !string.IsNullOrWhiteSpace(existing["search_citations_json"]) && existing["search_citations_json"] != "[]" ||
+                stageKey == "research" || stageKey == "article-analysis" && ContainsSearchExcerpts(existing["result_text"]));
         if (reusable) return existing!["result_text"]!;
 
         string? responseId = existing?["response_id"];
@@ -254,11 +262,15 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
             ["input"] = input,
             ["max_output_tokens"] = int.TryParse(config["OpenAI:MaxOutputTokens"], out var maxOutputTokens) ? Math.Clamp(maxOutputTokens, 1000, 64000) : 18000,
             ["store"] = false,
-            ["background"] = true,
-            ["text"] = new JsonObject { ["format"] = new JsonObject { ["type"] = "json_schema", ["name"] = "threat_intel_output", ["strict"] = true, ["schema"] = schema } }
+            ["background"] = true
         };
+        if (useStructuredOutput) payload["text"] = new JsonObject { ["format"] = new JsonObject { ["type"] = "json_schema", ["name"] = "threat_intel_output", ["strict"] = true, ["schema"] = schema } };
         if (effort is not null) payload["reasoning"] = new JsonObject { ["effort"] = effort };
-        if (useSearch) payload["tools"] = new JsonArray(new JsonObject { ["type"] = "web_search" });
+        if (useSearch)
+        {
+            payload["tools"] = new JsonArray(new JsonObject { ["type"] = "web_search" });
+            payload["include"] = new JsonArray("web_search_call.action.sources");
+        }
         if (requireSearch) payload["tool_choice"] = "required";
         var revision = AiModelSettingsService.FromSnapshot(snapshot).Revision;
         db.Execute("INSERT INTO analysis_responses(article_id,stage_key,response_id,status,result_text,error,search_citations_json,updated_utc,requested_model,reasoning_effort,config_revision) VALUES(?,?,NULL,'submitting',NULL,NULL,'[]',?,?,?,?) ON CONFLICT(article_id,stage_key) DO UPDATE SET response_id=NULL,status='submitting',result_text=NULL,error=NULL,search_citations_json='[]',updated_utc=excluded.updated_utc,requested_model=excluded.requested_model,reasoning_effort=excluded.reasoning_effort,config_revision=excluded.config_revision", articleId, stageKey, DateTimeOffset.UtcNow.ToString("O"), model, effort, revision);
@@ -273,7 +285,7 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
         if (status is "queued" or "in_progress")
         {
             var result = await PollResponseAsync(key, responseId, articleId, stageKey, ct);
-            return result ?? await CallModelAsync(key, instructions, input, schema, useSearch, ct, articleId, stageKey, requireSearch);
+            return result ?? await CallModelAsync(key, instructions, input, schema, useSearch, ct, articleId, stageKey, requireSearch, useStructuredOutput);
         }
         return await HandleResponseStateAsync(root, status, articleId, stageKey, responseId, key, ct);
     }
@@ -364,10 +376,26 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
 
     private static string ExtractSearchCitations(JsonElement root)
     {
-        var citations = new JsonArray();
-        if (!root.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Array) return citations.ToJsonString();
+        var citations = new Dictionary<string, (string Url, string Title)>(StringComparer.Ordinal);
+        if (!root.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Array) return "[]";
+        void AddCitation(string? url, string? title)
+        {
+            if (!IsPublicHttp(url)) return;
+            var key = SourceUrlKey(url!);
+            var candidateTitle = string.IsNullOrWhiteSpace(title) ? url! : title;
+            if (!citations.TryGetValue(key, out var existing) || SameUrl(existing.Title, existing.Url) && !SameUrl(candidateTitle, url!))
+                citations[key] = (url!, candidateTitle);
+        }
         foreach (var item in output.EnumerateArray())
         {
+            if (item.TryGetProperty("type", out var itemType) && itemType.GetString() == "web_search_call" &&
+                item.TryGetProperty("action", out var action))
+            {
+                if (action.TryGetProperty("url", out var actionUrl)) AddCitation(actionUrl.GetString(), null);
+                if (action.TryGetProperty("sources", out var sources) && sources.ValueKind == JsonValueKind.Array)
+                    foreach (var source in sources.EnumerateArray())
+                        if (source.TryGetProperty("url", out var sourceUrl)) AddCitation(sourceUrl.GetString(), source.TryGetProperty("title", out var sourceTitle) ? sourceTitle.GetString() : null);
+            }
             if (!item.TryGetProperty("content", out var chunks) || chunks.ValueKind != JsonValueKind.Array) continue;
             foreach (var chunk in chunks.EnumerateArray())
             {
@@ -375,13 +403,42 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
                 foreach (var annotation in annotations.EnumerateArray())
                 {
                     if (!annotation.TryGetProperty("type", out var type) || type.GetString() != "url_citation" || !annotation.TryGetProperty("url", out var url)) continue;
-                    var value = url.GetString();
-                    if (!IsPublicHttp(value)) continue;
-                    citations.Add(new JsonObject { ["url"] = value, ["title"] = annotation.TryGetProperty("title", out var title) ? title.GetString() ?? value : value });
+                    AddCitation(url.GetString(), annotation.TryGetProperty("title", out var title) ? title.GetString() : null);
                 }
             }
         }
-        return citations.ToJsonString();
+        return JsonSerializer.Serialize(citations.Values.Select(x => new { url = x.Url, title = x.Title }));
+    }
+
+    private static string MergeSearchCitations(params string[] citationJson)
+    {
+        var citations = new Dictionary<string, (string Url, string Title)>(StringComparer.Ordinal);
+        foreach (var json in citationJson)
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) continue;
+            foreach (var citation in document.RootElement.EnumerateArray())
+            {
+                var url = citation.TryGetProperty("url", out var urlElement) ? urlElement.GetString() : null;
+                if (!IsPublicHttp(url)) continue;
+                var title = citation.TryGetProperty("title", out var titleElement) ? titleElement.GetString() ?? url! : url!;
+                var key = SourceUrlKey(url!);
+                if (!citations.TryGetValue(key, out var existing) || SameUrl(existing.Title, existing.Url) && !SameUrl(title, url!))
+                    citations[key] = (url!, title);
+            }
+        }
+        return JsonSerializer.Serialize(citations.Values.Select(x => new { url = x.Url, title = x.Title }));
+    }
+
+    private static bool ContainsSearchExcerpts(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty("search_excerpts", out var excerpts) && excerpts.ValueKind == JsonValueKind.Array && excerpts.GetArrayLength() > 0;
+        }
+        catch (JsonException) { return false; }
     }
 
     private async Task<JsonElement> ValidateKqlAsync(string query, CancellationToken ct)
@@ -440,7 +497,9 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
             if (!IsPublicHttp(url) || string.IsNullOrWhiteSpace(content) || content.Length > 1800) continue;
             var citation = cited.FirstOrDefault(x => SameUrl(x.Url, url!));
             if (citation.Url is null) continue;
-            var title = !string.IsNullOrWhiteSpace(citation.Title) ? citation.Title : excerpt.TryGetProperty("title", out var t) ? t.GetString() ?? url! : url!;
+            var title = !string.IsNullOrWhiteSpace(citation.Title) && !SameUrl(citation.Title, citation.Url)
+                ? citation.Title
+                : excerpt.TryGetProperty("title", out var t) ? t.GetString() ?? url! : url!;
             result.Add((url!, Clean(title, 300, url!), content));
             if (result.Count == 8) break;
         }

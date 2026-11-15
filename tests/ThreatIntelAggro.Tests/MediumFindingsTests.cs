@@ -367,7 +367,7 @@ public sealed class MediumFindingsTests
         """.Replace("__EXCERPT__", excerpt, StringComparison.Ordinal);
         const string detections = "{\"schema_version\":\"1.1\",\"outcome\":\"no_supported_detection\",\"reason\":\"No behavior detail.\",\"detections\":[],\"coverage\":[]}";
         var citedUrl = "https://www.akamai.com/blog/ai/2026/nov/ai-vulnerability-surge-exposure-response";
-        var apiHandler = new FallbackAnalysisHandler([research, article, detections], citedUrl, "Akamai blog");
+        var apiHandler = new FallbackAnalysisHandler([research, "The original Akamai article is available and discusses vulnerability discovery.", article, detections], citedUrl, "Akamai blog");
         using var http = new HttpClient(apiHandler);
         using var fetcher = new SafePublicFetcher(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.Forbidden)));
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["OpenAI:ApiKey"] = "fixture" }).Build();
@@ -376,12 +376,14 @@ public sealed class MediumFindingsTests
         var service = new AnalysisService(http, fetcher, db, config, NullLogger<AnalysisService>.Instance, settings);
 
         Assert.True(await service.AnalyzeOneAsync(1));
-        Assert.Equal(2, apiHandler.Requests.Count(request => request.TryGetProperty("tool_choice", out var choice) && choice.GetString() == "required" && request.GetProperty("tools")[0].GetProperty("type").GetString() == "web_search"));
+        Assert.Equal(3, apiHandler.Requests.Count(request => request.TryGetProperty("tool_choice", out var choice) && choice.GetString() == "required" && request.GetProperty("tools")[0].GetProperty("type").GetString() == "web_search" && request.GetProperty("include").EnumerateArray().Any(x => x.GetString() == "web_search_call.action.sources")));
+        Assert.False(apiHandler.Requests[1].TryGetProperty("text", out _));
         Assert.Equal("", db.Query("SELECT content_text FROM articles WHERE id=1")[0]["content_text"]);
         using (var ledger = JsonDocument.Parse(db.Query("SELECT source_ledger_json FROM articles WHERE id=1")[0]["source_ledger_json"]!))
             Assert.Equal("search_excerpt", ledger.RootElement.EnumerateArray().Single(x => x.GetProperty("source_id").GetString() == "src_article").GetProperty("inspection_status").GetString());
         Assert.Equal(excerpt, db.Query("SELECT content FROM source_snapshots WHERE article_id=1 AND source_id='src_article'")[0]["content"]);
         Assert.Contains(citedUrl, db.Query("SELECT search_citations_json FROM analysis_responses WHERE article_id=1 AND stage_key='research'")[0]["search_citations_json"]);
+        Assert.Contains(citedUrl, db.Query("SELECT search_citations_json FROM analysis_responses WHERE article_id=1 AND stage_key='article-search-citations'")[0]["search_citations_json"]);
         Assert.Contains(citedUrl, db.Query("SELECT search_citations_json FROM analysis_responses WHERE article_id=1 AND stage_key='article-analysis'")[0]["search_citations_json"]);
         Assert.DoesNotContain("search_excerpts", db.Query("SELECT analysis_json FROM articles WHERE id=1")[0]["analysis_json"]);
     }
@@ -453,8 +455,17 @@ public sealed class MediumFindingsTests
             using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult());
             Requests.Add(body.RootElement.Clone());
             var index = _index++;
-            var annotation = new { type = "url_citation", url = citedUrl, title = citedTitle, start_index = 0, end_index = 10 };
-            var response = JsonSerializer.Serialize(new { id = $"resp_fixture_{index}", status = "completed", output = new[] { new { type = "message", content = new[] { new { type = "output_text", text = stages[index], annotations = index < 2 ? new[] { annotation } : Array.Empty<object>() } } } } });
+            object message = new { type = "message", content = new object[] { new { type = "output_text", text = stages[index] } } };
+            object[] output;
+            if (index == 0)
+                output = [new { type = "web_search_call", status = "completed", action = new { type = "search", sources = new[] { new { type = "url", url = citedUrl, title = citedTitle } } } }, message];
+            else if (index == 1)
+                output = [new { type = "message", content = new object[] { new { type = "output_text", text = stages[index], annotations = new object[] { new { type = "url_citation", url = citedUrl, title = citedTitle } } } } }];
+            else if (index == 2)
+                output = [new { type = "web_search_call", status = "completed", action = new { type = "open_page", url = citedUrl } }, message];
+            else
+                output = [message];
+            var response = JsonSerializer.Serialize(new { id = $"resp_fixture_{index}", status = "completed", output });
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(response, Encoding.UTF8, "application/json") });
         }
     }
