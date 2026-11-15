@@ -50,6 +50,43 @@ public sealed class BriefingTests
         Assert.True(end.AddDays(-1) < end);
     }
 
+    [Fact]
+    public async Task Failed_briefing_writer_records_error_and_raw_output_without_creating_a_briefing()
+    {
+        using var fixture = DatabaseFixture.Create(); var db = fixture.Database;
+        var end = DateTimeOffset.UtcNow; var start = end.AddDays(-1);
+        db.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES('vendor','Microsoft',1,0)");
+        InsertArticle(db, "Microsoft security advisory", end.AddHours(-1), "Azure SQL data theft investigated.", "Microsoft");
+        var service = new BriefingService(db, new FailingWriter());
+
+        var error = await Assert.ThrowsAsync<BriefingGenerationException>(() => service.GenerateAsync(end));
+
+        Assert.Equal("""{"title":""", error.RawOutput);
+        var diagnostic = db.Query("SELECT stage_key,error,raw_output,briefing_window_start_utc,briefing_window_end_utc FROM analysis_diagnostics").Single();
+        Assert.Equal("briefing-generation", diagnostic["stage_key"]);
+        Assert.Equal("Invalid generated briefing JSON.", diagnostic["error"]);
+        Assert.Equal("""{"title":""", diagnostic["raw_output"]);
+        Assert.Equal(start.ToUniversalTime().ToString("O"), diagnostic["briefing_window_start_utc"]);
+        Assert.Empty(db.Query("SELECT id FROM briefings"));
+    }
+
+    [Fact]
+    public void Article_diagnostics_keep_raw_response_and_truncate_oversized_output()
+    {
+        using var fixture = DatabaseFixture.Create(); var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        db.Execute("INSERT INTO articles(feed_title,title,url,first_seen_utc) VALUES('Fixture','Diagnostic article','https://example.test/diagnostic',?)", now);
+        var articleId = long.Parse(db.Query("SELECT id FROM articles WHERE title='Diagnostic article'").Single()["id"]!);
+
+        AnalysisDiagnostics.RecordArticle(db, articleId, "article-analysis", "Invalid IOC role at iocs[0].role.", new string('x', 100_001));
+
+        var row = db.Query("SELECT stage_key,error,raw_output FROM analysis_diagnostics WHERE article_id=?", articleId).Single();
+        Assert.Equal("article-analysis", row["stage_key"]);
+        Assert.Equal("Invalid IOC role at iocs[0].role.", row["error"]);
+        Assert.EndsWith("[truncated]", row["raw_output"]);
+        Assert.Equal(100_000 + Environment.NewLine.Length + "[truncated]".Length, row["raw_output"]!.Length);
+    }
+
     private static void InsertArticle(AppDatabase db, string title, DateTimeOffset published, string overview, string vendor)
     {
         var analysis = $$"""
@@ -74,6 +111,12 @@ public sealed class BriefingTests
             Prompt = prompt; Articles = articles;
             return Task.FromResult(new BriefingDraft("Daily briefing", "Executive summary", "Detection summary", "1 suspicious domain"));
         }
+    }
+
+    private sealed class FailingWriter : IBriefingWriter
+    {
+        public Task<BriefingDraft> WriteAsync(string prompt, IReadOnlyList<BriefingArticle> articles, IReadOnlyList<Dictionary<string, string?>> detections, CancellationToken ct) =>
+            Task.FromException<BriefingDraft>(new BriefingGenerationException("Invalid generated briefing JSON.", """{"title":"""));
     }
 
     private sealed class DatabaseFixture : IDisposable

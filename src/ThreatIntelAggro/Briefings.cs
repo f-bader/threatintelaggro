@@ -47,6 +47,11 @@ public static class BriefingMatcher
 
 public interface IBriefingWriter { Task<BriefingDraft> WriteAsync(string prompt, IReadOnlyList<BriefingArticle> articles, IReadOnlyList<Dictionary<string, string?>> detections, CancellationToken ct); }
 
+public sealed class BriefingGenerationException(string message, string? rawOutput, Exception? innerException = null) : Exception(message, innerException)
+{
+    public string? RawOutput { get; } = rawOutput;
+}
+
 public sealed class OpenAiBriefingWriter(IHttpClientFactory clients, IConfiguration configuration, AiModelSettingsService settings) : IBriefingWriter
 {
     public async Task<BriefingDraft> WriteAsync(string prompt, IReadOnlyList<BriefingArticle> articles, IReadOnlyList<Dictionary<string, string?>> detections, CancellationToken ct)
@@ -74,11 +79,22 @@ public sealed class OpenAiBriefingWriter(IHttpClientFactory clients, IConfigurat
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/responses") { Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json") };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
         using var response = await clients.CreateClient("BriefingAI").SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-        var text = doc.RootElement.GetProperty("output").EnumerateArray().SelectMany(o => o.GetProperty("content").EnumerateArray()).First(c => c.TryGetProperty("type", out var t) && t.GetString() == "output_text").GetProperty("text").GetString()!;
-        using var result = JsonDocument.Parse(text); var root = result.RootElement;
-        return new BriefingDraft(root.GetProperty("title").GetString() ?? "Daily threat briefing", root.GetProperty("executive_summary").GetString() ?? "", root.GetProperty("detection_summary").GetString() ?? "", root.GetProperty("ioc_summary").GetString() ?? "");
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode) throw new BriefingGenerationException($"OpenAI briefing request failed with HTTP {(int)response.StatusCode}.", responseBody);
+        string? outputText = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(responseBody);
+            outputText = doc.RootElement.GetProperty("output").EnumerateArray().SelectMany(o => o.GetProperty("content").EnumerateArray()).First(c => c.TryGetProperty("type", out var t) && t.GetString() == "output_text").GetProperty("text").GetString();
+            if (outputText is null) throw new InvalidOperationException("OpenAI returned no briefing output text.");
+            using var result = JsonDocument.Parse(outputText); var root = result.RootElement;
+            return new BriefingDraft(root.GetProperty("title").GetString() ?? "Daily threat briefing", root.GetProperty("executive_summary").GetString() ?? "", root.GetProperty("detection_summary").GetString() ?? "", root.GetProperty("ioc_summary").GetString() ?? "");
+        }
+        catch (BriefingGenerationException) { throw; }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or InvalidCastException)
+        {
+            throw new BriefingGenerationException($"Briefing response could not be parsed: {ex.Message}", outputText ?? responseBody, ex);
+        }
     }
 }
 
@@ -126,7 +142,13 @@ public sealed class BriefingService(AppDatabase database, IBriefingWriter writer
         var ids = articles.Select(a => a.Id.ToString()).ToArray();
         var detections = database.Query($"SELECT d.alert_title,d.description,d.severity,a.title AS article_title FROM detections d JOIN articles a ON a.id=d.article_id WHERE d.article_id IN ({string.Join(',', ids.Select(_ => "?"))}) AND d.archived=0 ORDER BY d.created_utc DESC", ids.Cast<object?>().ToArray());
         var prompt = ResolvePrompt(IocExclusionSettings.Get(database, "briefing_prompt"));
-        var draft = await writer.WriteAsync(prompt, articles, detections, ct);
+        BriefingDraft draft;
+        try { draft = await writer.WriteAsync(prompt, articles, detections, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            AnalysisDiagnostics.RecordBriefing(database, start, end, ex.Message, (ex as BriefingGenerationException)?.RawOutput);
+            throw;
+        }
         var markdown = BriefingExport.Markdown(draft, start, end, articles, detections);
         var snapshot = JsonSerializer.Serialize(articles);
         database.Execute("INSERT OR IGNORE INTO briefings(window_start_utc,window_end_utc,created_utc,title,executive_summary,detection_summary,ioc_summary,article_ids_json,article_snapshot_json,markdown) VALUES(?,?,?,?,?,?,?,?,?,?)", start.ToString("O"), end.ToString("O"), DateTimeOffset.UtcNow.ToString("O"), draft.Title, draft.ExecutiveSummary, draft.DetectionSummary, draft.IocSummary, JsonSerializer.Serialize(ids), snapshot, markdown);

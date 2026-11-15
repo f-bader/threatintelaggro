@@ -52,6 +52,14 @@ public sealed class AppDatabase : IDisposable
                     requested_model TEXT NOT NULL DEFAULT '', actual_model TEXT, reasoning_effort TEXT, config_revision INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(article_id,stage_key)
                 );
+                CREATE TABLE IF NOT EXISTS analysis_diagnostics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    article_id INTEGER REFERENCES articles(id) ON DELETE CASCADE,
+                    briefing_window_start_utc TEXT, briefing_window_end_utc TEXT,
+                    stage_key TEXT NOT NULL, error TEXT NOT NULL, raw_output TEXT,
+                    created_utc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_analysis_diagnostics_created ON analysis_diagnostics(created_utc DESC);
                 CREATE TABLE IF NOT EXISTS detections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
                     local_key TEXT NOT NULL, alert_title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', severity TEXT NOT NULL DEFAULT 'medium',

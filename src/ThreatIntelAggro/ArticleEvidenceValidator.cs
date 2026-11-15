@@ -27,6 +27,7 @@ public static class ArticleEvidenceValidator
             ValidateEvidence(finding["evidence"]!.AsArray(), ledger, true);
         }
         ValidateEvidence(root["detection_assessment"]!["evidence"]!.AsArray(), ledger, root["detection_assessment"]!["potential"]!.GetValue<string>() == "sufficient");
+        var iocIndex = 0;
         foreach (var item in root["iocs"]!.AsArray())
         {
             var ioc = item!;
@@ -34,7 +35,8 @@ public static class ArticleEvidenceValidator
             var value = ioc["value"]!.GetValue<string>();
             var normalized = ioc["normalized_value"]?.GetValue<string>() ?? value;
             if (string.IsNullOrWhiteSpace(value) || value.Length > 2048 || string.IsNullOrWhiteSpace(ioc["context"]!.GetValue<string>())) Fail("IOC value and context are required.");
-            if (ioc["role"]!.GetValue<string>() is not ("malicious" or "suspicious" or "benign_context" or "unknown")) Fail("Invalid IOC role.");
+            var role = ioc["role"]!.GetValue<string>();
+            if (role is not ("malicious" or "suspicious" or "benign_context" or "unknown")) Fail($"iocs[{iocIndex}].role has unsupported value '{role}'. Allowed: malicious, suspicious, benign_context, unknown.");
             CheckAssessment(ioc);
             if (!IndicatorNormalization.Matches(type, value, ioc["normalized_value"]?.GetValue<string>())) Fail("Normalized IOC does not match its original value.");
             CheckIndicator(type, normalized);
@@ -51,6 +53,7 @@ public static class ArticleEvidenceValidator
                 if (excerpt.Contains(value, StringComparison.OrdinalIgnoreCase)) valueFound = true;
             }
             if (!valueFound) Fail("IOC value is absent from its cited sources.");
+            iocIndex++;
         }
         foreach (var field in new[] { "mitre_mappings", "industries", "threat_actors", "vendors", "products", "malware", "campaigns", "vulnerabilities", "targeted_countries" })
             foreach (var mapping in root[field]!.AsArray())

@@ -82,6 +82,11 @@ public sealed class RetrievalAndEvidenceTests
         article["iocs"]![0]!["normalized_value"] = "unrelated.example";
         Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
         article["iocs"]![0]!["normalized_value"] = "evil.example";
+        article["iocs"]![0]!["role"] = "malware";
+        var roleError = Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
+        Assert.Contains("iocs[0].role", roleError.Message);
+        Assert.Contains("malware", roleError.Message);
+        article["iocs"]![0]!["role"] = "malicious";
         article["iocs"]![0]!["evidence"] = new JsonArray();
         Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
     }
