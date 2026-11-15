@@ -71,7 +71,7 @@ public sealed class AppDatabase : IDisposable
                 );
                 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS briefing_follows (id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL CHECK(kind IN ('vendor','industry','product')),name TEXT NOT NULL,is_enabled INTEGER NOT NULL DEFAULT 1,is_custom INTEGER NOT NULL DEFAULT 0,UNIQUE(kind,name COLLATE NOCASE));
-                CREATE TABLE IF NOT EXISTS briefings (id INTEGER PRIMARY KEY AUTOINCREMENT,window_start_utc TEXT NOT NULL,window_end_utc TEXT NOT NULL,created_utc TEXT NOT NULL,title TEXT NOT NULL,executive_summary TEXT NOT NULL,detection_summary TEXT NOT NULL,ioc_summary TEXT NOT NULL,article_ids_json TEXT NOT NULL,article_snapshot_json TEXT NOT NULL,markdown TEXT NOT NULL,UNIQUE(window_start_utc,window_end_utc));
+                CREATE TABLE IF NOT EXISTS briefings (id INTEGER PRIMARY KEY AUTOINCREMENT,window_start_utc TEXT NOT NULL,window_end_utc TEXT NOT NULL,created_utc TEXT NOT NULL,title TEXT NOT NULL,executive_summary TEXT NOT NULL,detection_summary TEXT NOT NULL,ioc_summary TEXT NOT NULL,article_ids_json TEXT NOT NULL,article_snapshot_json TEXT NOT NULL,markdown TEXT NOT NULL,detections_snapshot_json TEXT,iocs_snapshot_json TEXT,UNIQUE(window_start_utc,window_end_utc));
                 CREATE INDEX IF NOT EXISTS ix_briefings_created ON briefings(created_utc DESC);
                 CREATE TABLE IF NOT EXISTS article_ai_config (article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,config_json TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ioc_exclusions (id INTEGER PRIMARY KEY AUTOINCREMENT,value TEXT NOT NULL UNIQUE,created_utc TEXT NOT NULL);
@@ -96,6 +96,10 @@ public sealed class AppDatabase : IDisposable
                 "ALTER TABLE articles ADD COLUMN source_ledger_json TEXT NOT NULL DEFAULT '[]'",
                 "ALTER TABLE articles ADD COLUMN category TEXT NOT NULL DEFAULT 'Existing Research'",
                 "ALTER TABLE articles ADD COLUMN category_manual INTEGER NOT NULL DEFAULT 0"
+            }) { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
+            foreach (var migration in new[] {
+                "ALTER TABLE briefings ADD COLUMN detections_snapshot_json TEXT",
+                "ALTER TABLE briefings ADD COLUMN iocs_snapshot_json TEXT"
             }) { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
             var followDefinition = Query("SELECT sql FROM sqlite_master WHERE type='table' AND name='briefing_follows'").FirstOrDefault()?.GetValueOrDefault("sql") ?? "";
             if (!followDefinition.Contains("'product'", StringComparison.OrdinalIgnoreCase))

@@ -96,13 +96,18 @@ app.MapGet("/health", (AppDatabase database) =>
     try { database.ScalarInt("SELECT COUNT(*) FROM feeds"); return Results.Ok(new { status = "healthy" }); }
     catch { return Results.StatusCode(503); }
 });
-app.MapGet("/briefings/rss/{token}", (string token, HttpRequest request, AppDatabase database) =>
+app.MapGet("/briefings/rss/{token}", (string token, HttpRequest request, AppDatabase database, BriefingService briefings) =>
 {
     var expected = IocExclusionSettings.Get(database, "briefing_rss_hash") ?? "";
     var supplied = BriefingService.HashFeedId(token);
     if (expected.Length != supplied.Length || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(expected), System.Text.Encoding.ASCII.GetBytes(supplied))) return Results.NotFound();
     var baseUrl = $"{request.Scheme}://{request.Host}";
-    var items = database.Query("SELECT id,title,created_utc,executive_summary,detection_summary,ioc_summary,article_snapshot_json FROM briefings ORDER BY window_end_utc DESC");
+    var items = database.Query("SELECT id,title,created_utc,executive_summary,detection_summary,ioc_summary,article_snapshot_json,detections_snapshot_json,iocs_snapshot_json FROM briefings ORDER BY window_end_utc DESC");
+    foreach (var item in items)
+    {
+        if (item.GetValueOrDefault("detections_snapshot_json") is null) item["detections_snapshot_json"] = System.Text.Json.JsonSerializer.Serialize(briefings.GetDetections(item));
+        if (item.GetValueOrDefault("iocs_snapshot_json") is null) item["iocs_snapshot_json"] = System.Text.Json.JsonSerializer.Serialize(briefings.GetIocs(item));
+    }
     return Results.Text(BriefingService.BuildRss(baseUrl, items), "application/rss+xml; charset=utf-8");
 });
 app.MapGet("/internal/articles/status", (AppDatabase database) => Results.Json(database.Query("SELECT id,ai_status AS status,ai_error AS error FROM articles ORDER BY id DESC LIMIT 200").Select(x => new { id = x["id"], status = x["status"], error = x["error"] })));

@@ -8,11 +8,18 @@ public sealed class IndexModel(BriefingService briefings) : PageModel
     public Dictionary<string, string?>? Latest { get; private set; }
     public IReadOnlyList<Dictionary<string, string?>> Archive { get; private set; } = [];
     public System.Text.Json.JsonElement[] Articles { get; private set; } = [];
+    public BriefingDetection[] Detections { get; private set; } = [];
+    public BriefingIoc[] Iocs { get; private set; } = [];
     [TempData] public string? Notice { get; set; }
     public void OnGet()
     {
         Latest = briefings.Latest; Archive = briefings.Archive;
-        if (Latest is not null) try { Articles = System.Text.Json.JsonDocument.Parse(Latest["article_snapshot_json"]!).RootElement.EnumerateArray().Select(x => x.Clone()).ToArray(); } catch { Articles = []; }
+        if (Latest is not null)
+        {
+            try { Articles = System.Text.Json.JsonDocument.Parse(Latest["article_snapshot_json"]!).RootElement.EnumerateArray().Select(x => x.Clone()).ToArray(); } catch { Articles = []; }
+            Detections = briefings.GetDetections(Latest);
+            Iocs = briefings.GetIocs(Latest);
+        }
     }
     public async Task<IActionResult> OnPostGenerateAsync(CancellationToken cancellationToken)
     {

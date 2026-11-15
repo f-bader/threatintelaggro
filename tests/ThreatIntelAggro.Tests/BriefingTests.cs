@@ -40,13 +40,21 @@ public sealed class BriefingTests
         Assert.True(service.HasInProgressAnalysis(end));
         var row = service.Get(long.Parse(service.Archive[0]["id"]!))!;
         Assert.Contains("Microsoft security advisory", row["markdown"]);
-        Assert.Contains("products: Azure SQL", row["markdown"]);
+        Assert.Contains("Products: Azure SQL", row["markdown"]);
         using (var snapshot = System.Text.Json.JsonDocument.Parse(row["article_snapshot_json"]!))
         {
             Assert.Equal("Azure SQL", BriefingView.ProductMatches(snapshot.RootElement[0]));
             Assert.Contains("Azure SQL matched article value Azure SQL", BriefingView.MatchReasons(snapshot.RootElement[0]));
         }
         Assert.Contains("1 suspicious domain", row["ioc_summary"]);
+        Assert.Contains("bad[.]example", row["markdown"]);
+        Assert.DoesNotContain("Match reasons:", row["markdown"]);
+        Assert.DoesNotContain("matched article value", row["markdown"]);
+        using (var iocSnapshot = System.Text.Json.JsonDocument.Parse(row["iocs_snapshot_json"]!))
+        {
+            Assert.Equal("bad[.]example", iocSnapshot.RootElement[0].GetProperty("Value").GetString());
+            Assert.Equal("suspicious", iocSnapshot.RootElement[0].GetProperty("Role").GetString());
+        }
         Assert.Equal("1", db.Query("SELECT COUNT(*) AS count FROM briefings")[0]["count"]);
         Assert.Equal(0, await service.GenerateAsync(end.AddDays(-4)));
         Assert.Equal("%PDF-1.4", System.Text.Encoding.ASCII.GetString(BriefingExport.Pdf(row["markdown"]!)[..8]));
@@ -54,7 +62,7 @@ public sealed class BriefingTests
         Assert.Equal(1, await service.GenerateAsync(end.AddSeconds(1)));
         var rss = BriefingService.BuildRss("https://aggro.example", db.Query("SELECT id,title,created_utc,executive_summary,detection_summary,ioc_summary,article_snapshot_json FROM briefings"));
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(rss, "<item>").Count);
-        Assert.Contains("Detection summary", rss);
+        Assert.Contains("DETECTION SUMMARY", rss);
         Assert.Contains("https://example.test/Microsoft%20security%20advisory", rss);
         Assert.True(end.AddDays(-1) < end);
     }
@@ -65,6 +73,105 @@ public sealed class BriefingTests
         using var article = System.Text.Json.JsonDocument.Parse("""{"VendorMatches":"Microsoft","IndustryMatches":"Healthcare","VendorMatchReasons":[],"IndustryMatchReasons":[]}""");
         Assert.Equal("", BriefingView.ProductMatches(article.RootElement));
         Assert.Equal("", BriefingView.MatchReasons(article.RootElement));
+    }
+
+    [Theory]
+    [InlineData("url", "https://evil.example/path", "hxxps://evil[.]example/path")]
+    [InlineData("domain", "evil[.]example", "evil[.]example")]
+    [InlineData("email", "analyst@evil.example", "analyst@evil[.]example")]
+    [InlineData("ipv4", "192.0.2.10", "192[.]0[.]2[.]10")]
+    [InlineData("ipv6", "2001:db8::1", "2001[:]db8[:][:]1")]
+    public void Defangs_network_indicators(string type, string value, string expected) => Assert.Equal(expected, BriefingIndicators.Defang(type, value));
+
+    [Fact]
+    public void Defangs_indicator_values_in_summary_text_and_deduplicates_ioc_rows()
+    {
+        using var analysis = System.Text.Json.JsonDocument.Parse("""{"iocs":[{"type":"url","value":"https://evil.example/path","role":"malicious"},{"type":"domain","value":"evil.example","role":"malicious"}]}""");
+        var text = BriefingIndicators.DefangText("Observed https://evil.example/path hosted on evil.example.", [analysis.RootElement]);
+        Assert.Equal("Observed hxxps://evil[.]example/path hosted on evil[.]example.", text);
+
+        var iocs = BriefingIndicators.Distinct([
+            new BriefingIoc("domain", "evil[.]example", "malicious"),
+            new BriefingIoc("DOMAIN", "evil[.]example", "MALICIOUS")]);
+        Assert.Single(iocs);
+    }
+
+    [Fact]
+    public void Pdf_renders_ioc_rows_as_bounded_table_cells_and_wraps_long_values()
+    {
+        var hash = new string('a', 64);
+        var markdown = $"## IOC summary\n\n| Type | Value | Role |\n| --- | --- | --- |\n| sha256 | {hash} | malicious |";
+        var pdf = System.Text.Encoding.ASCII.GetString(BriefingExport.Pdf(markdown));
+
+        Assert.Contains("0.91 0.96 0.97 rg", pdf);
+        Assert.Contains("0.68 0.76 0.80 RG", pdf);
+        Assert.Contains($"({hash[..55]}) Tj ET", pdf);
+        Assert.Contains($"({hash[55..]}) Tj ET", pdf);
+        Assert.DoesNotContain("sha256   |", pdf);
+    }
+
+    [Fact]
+    public void Pdf_article_link_bounds_end_at_the_visible_title()
+    {
+        var pdf = System.Text.Encoding.ASCII.GetString(BriefingExport.Pdf("## Applicable articles\n\n- [Acme](https://example.test/article)"));
+        Assert.Matches("/Rect \\[48 \\d+ 73\\.56 \\d+\\]", pdf);
+        Assert.Contains("0.08 0.48 0.56 RG 48 ", pdf);
+        Assert.Contains("73.56", pdf);
+    }
+
+    [Fact]
+    public async Task New_briefings_render_detection_details_ioc_overview_and_clickable_article_titles()
+    {
+        using var fixture = DatabaseFixture.Create(); var db = fixture.Database; var service = new BriefingService(db, new FakeWriter());
+        var end = DateTimeOffset.UtcNow;
+        db.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES('vendor','Microsoft',1,0)");
+        InsertArticle(db, "Microsoft security advisory", end.AddHours(-1), "Source overview", "Microsoft");
+        var articleId = long.Parse(db.Query("SELECT id FROM articles WHERE title='Microsoft security advisory'").Single()["id"]!);
+        var now = end.ToString("O");
+        db.Execute("INSERT INTO detections(article_id,local_key,alert_title,description,severity,kql,guid,created_utc,updated_utc) VALUES(?,?,?,?,?,'DeviceEvents | take 1','fixture-guid',?,?)", articleId, "test", "Suspicious login burst", "Repeated failed sign-ins followed by a successful login.", "high", now, now);
+
+        await service.GenerateAsync(end);
+
+        var briefing = service.Latest!;
+        var markdown = briefing["markdown"]!;
+        Assert.Contains("### Suspicious login burst", markdown);
+        Assert.Contains("Repeated failed sign-ins followed by a successful login.", markdown);
+        Assert.Contains("| Type | Value | Role |", markdown);
+        Assert.Contains("| domain | bad[.]example | suspicious |", markdown);
+        Assert.DoesNotContain("Detection summary\n\nDetection summary", markdown);
+        Assert.DoesNotContain("Match reasons:", markdown);
+        var previousCulture = System.Globalization.CultureInfo.CurrentCulture;
+        string pdf;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("fr-FR");
+            pdf = System.Text.Encoding.ASCII.GetString(BriefingExport.Pdf(markdown));
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = previousCulture; }
+        Assert.Contains("/Subtype /Link", pdf);
+        Assert.Contains("/URI (https://example.test/Microsoft%20security%20advisory)", pdf);
+        Assert.DoesNotMatch("/Rect \\[\\d+ \\d+ \\d+,[\\d]+ \\d+\\]", pdf);
+        Assert.Contains("0.91 0.96 0.97 rg", pdf);
+        Assert.Contains("(Value)", pdf);
+        Assert.Contains("(bad[.]example)", pdf);
+        Assert.DoesNotContain("Type   |   Value   |   Role", pdf);
+        Assert.DoesNotContain("<https://example.test/Microsoft", pdf);
+    }
+
+    [Fact]
+    public void Legacy_briefing_snapshots_can_recover_indicators_and_detections_from_existing_articles()
+    {
+        using var fixture = DatabaseFixture.Create(); var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        InsertArticle(db, "Microsoft advisory", DateTimeOffset.UtcNow, "Overview", "Microsoft");
+        var articleId = long.Parse(db.Query("SELECT id FROM articles WHERE title='Microsoft advisory'").Single()["id"]!);
+        db.Execute("INSERT INTO detections(article_id,local_key,alert_title,description,kql,guid,created_utc,updated_utc) VALUES(?,?,?,?,'DeviceEvents | take 1','legacy-guid',?,?)", articleId, "legacy", "Legacy detection", "Legacy description", now, now);
+        db.Execute("INSERT INTO briefings(window_start_utc,window_end_utc,created_utc,title,executive_summary,detection_summary,ioc_summary,article_ids_json,article_snapshot_json,markdown) VALUES(?,?,?,?,?,?,?,?,?,?)", now, now, now, "Legacy", "Summary", "Old detection prose", "Old IOC summary", System.Text.Json.JsonSerializer.Serialize(new[] { articleId.ToString() }), "[]", "legacy markdown");
+        var service = new BriefingService(db, new FakeWriter());
+        var oldBriefing = service.Latest!;
+
+        Assert.Equal("Legacy detection", Assert.Single(service.GetDetections(oldBriefing)).Title);
+        Assert.Equal("bad[.]example", Assert.Single(service.GetIocs(oldBriefing)).Value);
     }
 
     [Fact]
