@@ -8,8 +8,33 @@
 <section class="panel diagnostics-settings-panel"><div class="panel-head"><div><div class="eyebrow">LOCAL INTERFACE</div><h2>Diagnostics</h2></div><span class="api-key-status @(Model.DiagnosticsVisible ? "is-active" : "is-missing")">@(Model.DiagnosticsVisible ? "VISIBLE" : "HIDDEN")</span></div><form method="post" asp-page-handler="SaveDiagnosticsVisibility" class="diagnostics-settings-form"><label><input asp-for="DiagnosticsVisibleInput" type="checkbox"/><span><strong>Show the Diagnostics tab</strong><small>When enabled, the tab displays recent failed analysis and briefing stages with their captured output.</small></span></label><button class="button button-secondary" type="submit">SAVE DISPLAY SETTING</button></form></section>
 <section class="panel briefing-settings-panel"><div class="panel-head"><div><div class="eyebrow">DAILY INTELLIGENCE</div><h2>Threat briefing</h2></div><span class="api-key-status @(Model.BriefingEnabled ? "is-active" : "is-missing")">@(Model.BriefingEnabled ? "SCHEDULED" : "PAUSED")</span></div>
 <form method="post" asp-page-handler="SaveBriefing" class="briefing-settings-form"><label class="briefing-enable"><input asp-for="BriefingEnabledInput" type="checkbox"/><span>Enable daily briefing generation</span></label><label>Generation time · UTC<input asp-for="BriefingTimeInput" type="time" required/></label><label class="briefing-prompt-label">Generation system prompt<textarea asp-for="BriefingPromptInput" rows="7" maxlength="10000"></textarea><small>Used for future generations. Leave blank and save to restore the default. Article content is treated as untrusted evidence.</small></label><button class="button button-primary" type="submit">SAVE BRIEFING SETTINGS</button></form>
-<div class="briefing-follow-controls"><div><div class="eyebrow">FOLLOWED VENDORS & INDUSTRIES</div><p class="form-footnote">Select names found in analyzed articles or enter a custom name. Matching is fuzzy and reports why an article matched.</p></div><datalist id="briefing-vendors">@foreach (var name in Model.AvailableBriefingVendors) { <option value="@name"></option> }</datalist><datalist id="briefing-industries">@foreach (var name in Model.AvailableBriefingIndustries) { <option value="@name"></option> }</datalist><form method="post" asp-page-handler="AddBriefingFollow" class="briefing-follow-add"><select asp-for="FollowKind"><option value="vendor">Affected vendor</option><option value="industry">Industry</option></select><input asp-for="FollowName" list="briefing-vendors" placeholder="Choose or add a custom name" maxlength="100" required/><button class="button button-secondary" type="submit">ADD</button></form>
-@if (Model.BriefingFollows.Count == 0) { <p class="form-footnote">No vendors or industries followed yet.</p> } else { <div class="briefing-follow-list">@foreach (var follow in Model.BriefingFollows) { <div><span class="follow-kind">@follow["kind"]?.ToUpperInvariant()</span><strong>@follow["name"]</strong><span class="quiet-label">@(follow["is_custom"] == "1" ? "CUSTOM" : "CATALOG")</span><form method="post" asp-page-handler="ToggleBriefingFollow"><input type="hidden" name="id" value="@follow["id"]"/><button class="small-action" type="submit">@(follow["is_enabled"] == "1" ? "DISABLE" : "ENABLE")</button></form><form method="post" asp-page-handler="RemoveBriefingFollow"><input type="hidden" name="id" value="@follow["id"]"/><button class="small-action danger-action" type="submit">REMOVE</button></form></div> }</div> }</div>
+<div class="briefing-follow-controls" id="briefing-follows">
+  <div class="briefing-follow-heading"><div class="eyebrow">FOLLOWED VENDORS & INDUSTRIES</div><p class="form-footnote">Type to find names from analyzed articles or add a custom name. Matching is fuzzy and reports why an article matched.</p></div>
+  <datalist id="briefing-vendors">@foreach (var name in Model.AvailableBriefingVendors) { <option value="@name"></option> }</datalist>
+  <datalist id="briefing-industries">@foreach (var name in Model.AvailableBriefingIndustries) { <option value="@name"></option> }</datalist>
+  <form method="post" asp-page-handler="AddBriefingFollow" class="briefing-follow-add" autocomplete="off">
+    <select asp-for="FollowKind" aria-label="Name type"><option value="vendor">Affected vendor</option><option value="industry">Industry</option></select>
+    <div class="briefing-follow-input-wrap">
+      <input asp-for="FollowName" placeholder="Type a vendor or industry name" maxlength="100" required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="briefing-follow-suggestions" aria-label="Search or add a followed name"/>
+      <div class="briefing-follow-suggestions" id="briefing-follow-suggestions" role="listbox" aria-label="Name suggestions" hidden></div>
+    </div>
+    <button class="button button-secondary briefing-follow-custom-submit" type="submit">+ ADD CUSTOM</button>
+  </form>
+  @if (Model.BriefingFollows.Count == 0) { <p class="form-footnote briefing-follow-empty">No vendors or industries followed yet.</p> } else {
+    <div class="briefing-follow-list" aria-label="Followed vendors and industries">
+      @foreach (var follow in Model.BriefingFollows) {
+        var isEnabled = follow["is_enabled"] == "1";
+        <div class="briefing-follow-chip @(isEnabled ? "is-enabled" : "is-disabled")" data-kind="@follow["kind"]" data-name="@follow["name"]">
+          <span class="follow-kind">@follow["kind"]?.ToUpperInvariant()</span>
+          <strong>@follow["name"]</strong>
+          <span class="quiet-label">@(follow["is_custom"] == "1" ? "CUSTOM" : "CATALOG")</span>
+          <form method="post" asp-page-handler="ToggleBriefingFollow"><input type="hidden" name="id" value="@follow["id"]"/><button class="follow-chip-toggle" type="submit" aria-label="@(isEnabled ? "Disable" : "Enable") @follow["name"]">@(isEnabled ? "ON" : "OFF")</button></form>
+          <form method="post" asp-page-handler="RemoveBriefingFollow"><input type="hidden" name="id" value="@follow["id"]"/><button class="follow-chip-remove" type="submit" aria-label="Remove @follow["name"]" title="Remove @follow["name"]">×</button></form>
+        </div>
+      }
+    </div>
+  }
+</div>
 <div class="briefing-rss-settings"><div><div class="eyebrow">FULL ARCHIVE RSS</div><p class="form-footnote">Unauthenticated feed access uses a random secret ID. Rotating it invalidates the previous feed URL.</p>@if (Model.BriefingFeedActive) { <span class="api-key-status is-active">ACTIVE</span> } @if (!string.IsNullOrWhiteSpace(Model.GeneratedBriefingFeedUrl)) { <code class="briefing-feed-url">@Model.GeneratedBriefingFeedUrl</code> }</div><form method="post" asp-page-handler="RotateBriefingFeed"><button class="button button-secondary" type="submit">@(Model.BriefingFeedActive ? "ROTATE FEED ID" : "GENERATE FEED URL")</button></form></div>
 </section>
 <section class="panel ai-settings-panel"><div class="panel-head"><div><div class="eyebrow">ANALYSIS ENGINE</div><h2>AI model and reasoning</h2></div><span class="api-key-status @(Model.CurrentAiSettings.IsConfigured ? "is-active" : "is-missing")">@(Model.CurrentAiSettings.IsConfigured ? "CONFIGURED" : "SETUP REQUIRED")</span></div>
@@ -70,11 +95,98 @@
 
 @section Scripts {
 <script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
+  const briefingFollowForm = document.querySelector('.briefing-follow-add');
   const briefingFollowKind = document.getElementById('FollowKind');
   const briefingFollowName = document.getElementById('FollowName');
-  const syncBriefingFollowOptions = () => { if (briefingFollowKind && briefingFollowName) briefingFollowName.setAttribute('list', briefingFollowKind.value === 'industry' ? 'briefing-industries' : 'briefing-vendors'); };
-  briefingFollowKind?.addEventListener('change', syncBriefingFollowOptions);
-  syncBriefingFollowOptions();
+  const briefingFollowSuggestions = document.getElementById('briefing-follow-suggestions');
+  const briefingFollowCustomButton = document.querySelector('.briefing-follow-custom-submit');
+  const briefingFollowScrollKey = 'briefing-follow-scroll';
+  const briefingFollowScroll = sessionStorage.getItem(briefingFollowScrollKey);
+  if (briefingFollowScroll !== null) {
+    sessionStorage.removeItem(briefingFollowScrollKey);
+    requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo(0, Number(briefingFollowScroll))));
+  }
+  document.querySelectorAll('.briefing-follow-controls form').forEach(form => form.addEventListener('submit', () => {
+    sessionStorage.setItem(briefingFollowScrollKey, String(window.scrollY));
+  }));
+  if (briefingFollowForm && briefingFollowKind && briefingFollowName && briefingFollowSuggestions && briefingFollowCustomButton) {
+    const catalogByKind = {
+      vendor: Array.from(document.querySelectorAll('#briefing-vendors option'), option => option.value),
+      industry: Array.from(document.querySelectorAll('#briefing-industries option'), option => option.value)
+    };
+    let activeSuggestion = -1;
+    const closeSuggestions = () => {
+      briefingFollowSuggestions.hidden = true;
+      briefingFollowSuggestions.replaceChildren();
+      briefingFollowName.setAttribute('aria-expanded', 'false');
+      briefingFollowName.removeAttribute('aria-activedescendant');
+      activeSuggestion = -1;
+    };
+    const submitSuggestion = name => {
+      briefingFollowName.value = name;
+      closeSuggestions();
+      briefingFollowForm.requestSubmit();
+    };
+    const renderSuggestions = () => {
+      const kind = briefingFollowKind.value;
+      const query = briefingFollowName.value.trim();
+      const normalizedQuery = query.toLocaleLowerCase();
+      const followed = new Set(Array.from(document.querySelectorAll('.briefing-follow-chip[data-kind="' + kind + '"]'), chip => chip.dataset.name.toLocaleLowerCase()));
+      const matches = catalogByKind[kind].filter(name => name.toLocaleLowerCase().includes(normalizedQuery) && !followed.has(name.toLocaleLowerCase())).slice(0, 8);
+      const exactMatch = catalogByKind[kind].some(name => name.toLocaleLowerCase() === normalizedQuery);
+      briefingFollowSuggestions.replaceChildren();
+      const addOption = (label, detail, value) => {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'briefing-follow-suggestion';
+        option.setAttribute('role', 'option');
+        option.id = 'briefing-follow-suggestion-' + briefingFollowSuggestions.children.length;
+        option.setAttribute('aria-selected', 'false');
+        const name = document.createElement('span');
+        name.textContent = label;
+        const source = document.createElement('span');
+        source.className = 'quiet-label';
+        source.textContent = detail;
+        option.append(name, source);
+        option.addEventListener('mousedown', event => event.preventDefault());
+        option.addEventListener('click', () => submitSuggestion(value));
+        briefingFollowSuggestions.append(option);
+      };
+      matches.forEach(name => addOption(name, 'CATALOG', name));
+      const alreadyFollowed = query.length > 0 && followed.has(normalizedQuery);
+      if (query.length >= 2 && !exactMatch && !alreadyFollowed) addOption('Add “' + query + '” as a new ' + kind, 'CUSTOM', query);
+      if (query.length >= 1 && matches.length === 0 && (query.length < 2 || exactMatch || alreadyFollowed)) return closeSuggestions();
+      if (briefingFollowSuggestions.children.length === 0) return closeSuggestions();
+      briefingFollowSuggestions.hidden = false;
+      briefingFollowName.setAttribute('aria-expanded', 'true');
+    };
+    const setActiveSuggestion = index => {
+      const options = Array.from(briefingFollowSuggestions.querySelectorAll('[role="option"]'));
+      if (options.length === 0) return;
+      activeSuggestion = (index + options.length) % options.length;
+      options.forEach((option, optionIndex) => {
+        option.classList.toggle('is-active', optionIndex === activeSuggestion);
+        option.setAttribute('aria-selected', optionIndex === activeSuggestion ? 'true' : 'false');
+      });
+      briefingFollowName.setAttribute('aria-activedescendant', options[activeSuggestion].id);
+    };
+    briefingFollowName.addEventListener('input', renderSuggestions);
+    briefingFollowName.addEventListener('focus', renderSuggestions);
+    briefingFollowName.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' && !briefingFollowSuggestions.hidden) { event.preventDefault(); setActiveSuggestion(activeSuggestion + 1); }
+      else if (event.key === 'ArrowUp' && !briefingFollowSuggestions.hidden) { event.preventDefault(); setActiveSuggestion(activeSuggestion < 0 ? briefingFollowSuggestions.children.length - 1 : activeSuggestion - 1); }
+      else if (event.key === 'Enter' && !briefingFollowSuggestions.hidden && activeSuggestion >= 0) { event.preventDefault(); briefingFollowSuggestions.children[activeSuggestion].click(); }
+      else if (event.key === 'Escape') closeSuggestions();
+    });
+    briefingFollowName.addEventListener('blur', () => setTimeout(closeSuggestions, 100));
+    briefingFollowKind.addEventListener('change', renderSuggestions);
+    briefingFollowCustomButton.addEventListener('click', event => {
+      if (briefingFollowName.value.trim().length < 2) {
+        event.preventDefault();
+        briefingFollowName.focus();
+      }
+    });
+  }
   document.querySelector('[data-copy-target]')?.addEventListener('click', async event => {
     const button = event.currentTarget;
     const target = document.getElementById(button.dataset.copyTarget);
