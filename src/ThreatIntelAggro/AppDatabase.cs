@@ -37,6 +37,7 @@ public sealed class AppDatabase : IDisposable
                     content_text TEXT NOT NULL DEFAULT '', analysis_json TEXT, analyzed_utc TEXT, evidence_verified INTEGER NOT NULL DEFAULT 0,
                     source_ledger_json TEXT NOT NULL DEFAULT '[]',
                     category TEXT NOT NULL DEFAULT 'Existing Research', category_manual INTEGER NOT NULL DEFAULT 0,
+                    screenshot_data_url TEXT, screenshot_metadata_json TEXT,
                     UNIQUE(feed_title, url)
                 );
                 CREATE INDEX IF NOT EXISTS ix_articles_published ON articles(published_utc DESC);
@@ -95,7 +96,9 @@ public sealed class AppDatabase : IDisposable
                 "ALTER TABLE articles ADD COLUMN analyzed_utc TEXT",
                 "ALTER TABLE articles ADD COLUMN source_ledger_json TEXT NOT NULL DEFAULT '[]'",
                 "ALTER TABLE articles ADD COLUMN category TEXT NOT NULL DEFAULT 'Existing Research'",
-                "ALTER TABLE articles ADD COLUMN category_manual INTEGER NOT NULL DEFAULT 0"
+                "ALTER TABLE articles ADD COLUMN category_manual INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE articles ADD COLUMN screenshot_data_url TEXT",
+                "ALTER TABLE articles ADD COLUMN screenshot_metadata_json TEXT"
             }) { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
             foreach (var migration in new[] {
                 "ALTER TABLE briefings ADD COLUMN detections_snapshot_json TEXT",

@@ -33,7 +33,7 @@ public static class ArticleEvidenceValidator
             var ioc = item!;
             var type = ioc["type"]!.GetValue<string>();
             var value = ioc["value"]!.GetValue<string>();
-            var normalized = ioc["normalized_value"]?.GetValue<string>() ?? value;
+            var normalized = ioc["normalized_value"]?.GetValue<string>() ?? IndicatorNormalization.Normalize(value);
             if (string.IsNullOrWhiteSpace(value) || value.Length > 2048 || string.IsNullOrWhiteSpace(ioc["context"]!.GetValue<string>())) Fail("IOC value and context are required.");
             var role = ioc["role"]!.GetValue<string>();
             if (role is not ("malicious" or "suspicious" or "benign_context" or "unknown")) Fail($"iocs[{iocIndex}].role has unsupported value '{role}'. Allowed: malicious, suspicious, benign_context, unknown.");

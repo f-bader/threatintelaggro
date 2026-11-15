@@ -14,8 +14,8 @@
   <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">ARCHIVE INDEX</div><div class="stat-value">@Model.TotalCount.ToString("N0")<span class="unit-mark">ITEMS</span></div><div class="stat-note">Retained in local SQLite</div><div class="metric-bar"><i style="width:@(Math.Min(100, Model.TotalCount * 4))%"></i></div></div>
 </section>
 @if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
-<section class="panel add-feed-panel adhoc-panel"><div class="panel-head"><div><div class="eyebrow">ONE-OFF COLLECTION</div><h2>Ad hoc analysis</h2></div><span class="quiet-label">PUBLIC ARTICLE URL</span></div>
-<form method="post" asp-page-handler="AdHocAnalyze" class="adhoc-form"><label for="AdHocUrl">Website URL<input asp-for="AdHocUrl" id="AdHocUrl" type="url" placeholder="https://example.com/security-report" required maxlength="2048"/><span asp-validation-for="AdHocUrl" class="validation"></span></label><button class="button button-primary" type="submit">AD HOC ANALYZE <span>↗</span></button></form><p class="form-footnote">Fetches this page once, adds it to your inbox, and queues the usual research and detection analysis. It does not create a recurring feed.</p></section>
+<section class="panel add-feed-panel adhoc-panel"><div class="panel-head"><div><div class="eyebrow">ONE-OFF COLLECTION</div><h2>Ad hoc analysis</h2></div><span class="quiet-label">PUBLIC POST OR SCREENSHOT</span></div>
+<form method="post" asp-page-handler="AdHocAnalyze" enctype="multipart/form-data" class="adhoc-form"><label for="AdHocUrl"><span class="field-heading">Post URL <span class="optional-label">OPTIONAL WITH IMAGE</span></span><input asp-for="AdHocUrl" id="AdHocUrl" type="url" placeholder="https://bsky.app/profile/.../post/..." maxlength="2048"/><span asp-validation-for="AdHocUrl" class="validation"></span></label><label for="AdHocImage"><span class="field-heading">Screenshot <span class="optional-label">PNG · JPEG · WEBP · MAX 8 MB</span></span><input asp-for="AdHocImage" id="AdHocImage" type="file" accept="image/png,image/jpeg,image/webp"/><span asp-validation-for="AdHocImage" class="validation"></span><span class="clipboard-hint">Choose a file or focus this form and paste an image with Ctrl/Cmd+V.</span><span class="clipboard-status" data-clipboard-feedback aria-live="polite"></span></label><button class="button button-primary" type="submit">AD HOC ANALYZE <span>↗</span></button></form><p class="form-footnote">Add a public post URL, a screenshot, or both. Screenshots are transcribed with image analysis; visible post text and author details are kept with the source evidence.</p></section>
 <section class="panel article-stream-panel">
  <div class="panel-head"><div class="panel-title"><span class="section-index" aria-hidden="true"></span><div><div class="eyebrow">COLLECTED INTELLIGENCE</div><h2>Article stream <span class="count-chip">@Model.Articles.Count</span></h2></div></div>
   <form method="get" class="toolbar article-filter-form" id="article-filter-form"><input type="hidden" name="filtersOpen" value="@(Model.FiltersOpen ? "true" : "false")"/><div class="filter-main"><label class="search-box"><span>⌕</span><input name="search" value="@Model.Search" placeholder="Search reports" aria-label="Search reports"/></label>
@@ -44,7 +44,8 @@
  {
   <article class="article-row @(article["is_read"] == "0" ? "unread" : "")" data-article-id="@article["id"]">
     <label class="article-select-marker"><input class="bulk-article-select" data-selection-item type="checkbox" name="SelectedIds" value="@article["id"]" form="bulk-articles-form" data-read-state="@article["is_read"]" data-ai-status="@article["ai_status"]" aria-label="Select @article["title"]"/><span class="article-marker" aria-hidden="true"></span></label><div class="article-content"><div class="article-meta"><span class="source-tag">@article["feed_title"]</span><span>·</span><span>@(DateTimeOffset.TryParse(article["published_utc"], out var date) ? date.ToLocalTime().ToString("dd MMM yyyy · HH:mm") : "Published date unavailable")</span><span class="pipeline-tag ai-@article["ai_status"]" title="@(article["ai_status"] == "failed" ? article["ai_error"] : null)" aria-label="@((article["ai_status"] == "failed" && !string.IsNullOrWhiteSpace(article["ai_error"])) ? $"Analysis failed: {article["ai_error"]}" : null)"><i></i> @((article["ai_status"] ?? "pending") switch { "analyzed" => "ANALYSIS COMPLETE", "analyzing" => "ANALYZING", "failed" => "ANALYSIS FAILED", _ => "AWAITING ANALYSIS" })</span>@if (article["ai_status"] == "analyzed") { <span class="category-pill category-@Model.CategoryClass(article["category"])" title="@Model.CategoryRationale(article["analysis_json"])">@ArticleCategories.Normalize(article["category"])</span> }</div>
-      <h3><a href="@article["url"]" target="_blank" rel="noopener noreferrer">@article["title"] <span class="external">↗</span></a></h3><p class="article-summary">@System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(article["summary"] ?? "", "<[^>]+>", " "))</p>
+    <h3>@if (article["url"]?.StartsWith("https://screenshot.invalid/", StringComparison.Ordinal) == true) { @article["title"] } else { <a href="@article["url"]" target="_blank" rel="noopener noreferrer">@article["title"] <span class="external">↗</span></a> }</h3>@if (Model.ScreenshotAuthor(article.GetValueOrDefault("screenshot_metadata_json")) is { Length: > 0 } author) { <p class="social-author">SOCIAL POST · @author</p> }<p class="article-summary">@System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(article["summary"] ?? "", "<[^>]+>", " "))</p>
+      @if (article["has_screenshot"] == "1") { <details class="screenshot-preview"><summary>VIEW ORIGINAL SCREENSHOT</summary><img src="@Url.Page("/Inbox", "Screenshot", new { id = article["id"] })" alt="Original uploaded social post screenshot" loading="lazy"/></details> }
       @if (article["ai_status"] == "failed") { <p class="analysis-error" title="@article["ai_error"]">Analysis did not finish. Retry when ready.</p> }
       <div class="article-actions"><form method="post" asp-page-handler="@(article["is_read"] == "0" ? "Read" : "Unread")"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><button class="mark-action" type="submit"><span aria-hidden="true">@(article["is_read"] == "0" ? "✓" : "↺")</span>@(article["is_read"] == "0" ? "MARK AS READ" : "MARK UNREAD")</button></form>
       @if (Model.DetectionCount(article["id"]) > 0) { <a class="mark-action" asp-page="/Detections" asp-route-articleId="@article["id"]">VIEW DETECTIONS</a> }
@@ -99,6 +100,40 @@
  </div>
  <div class="list-foot"><span>Showing @Model.Articles.Count most recent matching articles</span><span>⟳ &nbsp;Feed checks run in the background</span></div>
 </section>
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
+(() => {
+  const form = document.querySelector('.adhoc-form');
+  const imageInput = form?.querySelector('#AdHocImage');
+  const feedback = form?.querySelector('[data-clipboard-feedback]');
+  if (form && imageInput && feedback) {
+    imageInput.addEventListener('change', () => { feedback.textContent = ''; });
+    form.addEventListener('paste', event => {
+      const items = Array.from(event.clipboardData?.items ?? []);
+      const imageItem = items.find(item => item.kind === 'file' && item.type.startsWith('image/'));
+      if (!imageItem) return;
+      event.preventDefault();
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(imageItem.type)) {
+        feedback.textContent = 'Paste a PNG, JPEG, or WebP image.';
+        return;
+      }
+      const pastedImage = imageItem.getAsFile();
+      if (!pastedImage) {
+        feedback.textContent = 'The clipboard image could not be read. Try copying it again.';
+        return;
+      }
+      if (pastedImage.size > 8_000_000) {
+        feedback.textContent = 'Choose an image smaller than 8 MB.';
+        return;
+      }
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([pastedImage], pastedImage.name || `pasted-screenshot.${imageItem.type.split('/')[1]}`, { type: imageItem.type }));
+      imageInput.files = transfer.files;
+      imageInput.dispatchEvent(new Event('change', { bubbles: true }));
+      feedback.textContent = 'Screenshot pasted and ready to analyze.';
+    });
+  }
+})();
+</script>
 <script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
 (() => {
   const form = document.querySelector('#article-filter-form');

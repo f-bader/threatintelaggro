@@ -1,8 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace ThreatIntelAggro.Pages;
 
+[RequestSizeLimit(12_000_000)]
+[RequestFormLimits(MultipartBodyLengthLimit = 12_000_000)]
 public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageModel
 {
     public IReadOnlyList<Dictionary<string, string?>> Articles { get; private set; } = [];
@@ -31,6 +35,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
     [BindProperty(SupportsGet = true)] public string? Category { get; set; }
     [BindProperty(SupportsGet = true)] public string Sort { get; set; } = "recent";
     [BindProperty] public string AdHocUrl { get; set; } = "";
+    [BindProperty] public IFormFile? AdHocImage { get; set; }
     [BindProperty] public List<long> SelectedIds { get; set; } = [];
 
     public void OnGet()
@@ -62,7 +67,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
         var ordering = Sort == "priority"
             ? "CASE category WHEN 'Time-Critical Threat' THEN 0 WHEN 'Novel Research' THEN 1 WHEN 'Actionable IOCs' THEN 2 WHEN 'Existing Research' THEN 3 ELSE 4 END,COALESCE(published_utc,first_seen_utc) DESC"
             : "COALESCE(published_utc,first_seen_utc) DESC";
-        var articles = database.Query($"SELECT id,title,url,summary,published_utc,first_seen_utc,is_read,feed_title,ai_status,ai_error,analysis_json,source_ledger_json,category FROM articles {where} ORDER BY {ordering} LIMIT 1000", args.ToArray());
+        var articles = database.Query($"SELECT id,title,url,summary,published_utc,first_seen_utc,is_read,feed_title,ai_status,ai_error,analysis_json,source_ledger_json,screenshot_metadata_json,CASE WHEN screenshot_data_url IS NOT NULL THEN '1' ELSE '0' END AS has_screenshot,category FROM articles {where} ORDER BY {ordering} LIMIT 1000", args.ToArray());
         Articles = articles.Where(MatchesMappings).Take(100).ToArray();
     }
 
@@ -84,6 +89,40 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
             return document.RootElement.TryGetProperty("category_rationale", out var rationale) ? rationale.GetString() ?? "Analyst-set article category." : "Analyst-set article category.";
         }
         catch (System.Text.Json.JsonException) { return "Analyst-set article category."; }
+    }
+
+    public string? ScreenshotAuthor(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            var name = root.TryGetProperty("author_name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
+            var handle = root.TryGetProperty("author_handle", out var h) && h.ValueKind == JsonValueKind.String ? h.GetString() : null;
+            var platform = root.TryGetProperty("platform", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+            var badgeShown = root.TryGetProperty("author_verified", out var verified) && verified.ValueKind == JsonValueKind.True;
+            var author = string.Join(" · ", new[] { name, string.IsNullOrWhiteSpace(handle) ? null : handle.StartsWith('@') ? handle : "@" + handle }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            var platformLabel = platform switch { "x" => "X", "bluesky" => "Bluesky", "other" => "Social platform", _ => null };
+            return string.Join(" · ", new[] { author, platformLabel, badgeShown ? "verified badge shown" : null }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+        catch (JsonException) { return null; }
+    }
+
+    public IActionResult OnGetScreenshot(long id)
+    {
+        var dataUrl = database.Query("SELECT screenshot_data_url FROM articles WHERE id=?", id).FirstOrDefault()?.GetValueOrDefault("screenshot_data_url");
+        if (string.IsNullOrWhiteSpace(dataUrl)) return NotFound();
+        var comma = dataUrl.IndexOf(',');
+        var mediaType = dataUrl[..Math.Max(0, comma)].Replace("data:", "", StringComparison.OrdinalIgnoreCase).Replace(";base64", "", StringComparison.OrdinalIgnoreCase);
+        if (comma < 0 || mediaType is not ("image/png" or "image/jpeg" or "image/webp")) return NotFound();
+        try
+        {
+            var bytes = Convert.FromBase64String(dataUrl[(comma + 1)..]);
+            Response.Headers.CacheControl = "private, no-store";
+            return File(bytes, mediaType);
+        }
+        catch (FormatException) { return NotFound(); }
     }
 
     public IActionResult OnPostCategory(long id, string? selectedCategory, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? categoryFilter, string? sort)
@@ -179,17 +218,67 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
         return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort = sort == "priority" ? "priority" : "recent" });
     }
 
-    public IActionResult OnPostAdHocAnalyze()
+    public async Task<IActionResult> OnPostAdHocAnalyze(CancellationToken cancellationToken)
     {
-        AdHocUrl = AdHocUrl.Trim();
-        if (AdHocUrl.Length > 2048 || !Uri.TryCreate(AdHocUrl, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http") || !string.IsNullOrEmpty(uri.UserInfo))
+        AdHocUrl = (AdHocUrl ?? "").Trim();
+        Uri? uri = null;
+        if (AdHocUrl.Length > 0 && (AdHocUrl.Length > 2048 || !Uri.TryCreate(AdHocUrl, UriKind.Absolute, out uri) || uri.Scheme is not ("https" or "http") || !string.IsNullOrEmpty(uri.UserInfo)))
         {
             ModelState.AddModelError(nameof(AdHocUrl), "Enter a valid public HTTP or HTTPS website URL.");
             OnGet();
             return Page();
         }
 
-        var articleUrl = uri.GetComponents(UriComponents.HttpRequestUrl, UriFormat.UriEscaped);
+        if ((AdHocImage is null || AdHocImage.Length == 0) && AdHocUrl.Length == 0)
+        {
+            ModelState.AddModelError(nameof(AdHocUrl), "Enter a public post URL or choose a screenshot.");
+            OnGet();
+            return Page();
+        }
+
+        string? screenshotDataUrl = null;
+        string? screenshotHash = null;
+        if (AdHocImage is { Length: > 0 } image)
+        {
+            if (image.Length > 8_000_000)
+            {
+                ModelState.AddModelError(nameof(AdHocImage), "Choose an image smaller than 8 MB.");
+                OnGet();
+                return Page();
+            }
+
+            var bytes = new byte[image.Length];
+            await using (var stream = image.OpenReadStream())
+            {
+                var offset = 0;
+                while (offset < bytes.Length)
+                {
+                    var read = await stream.ReadAsync(bytes.AsMemory(offset), cancellationToken);
+                    if (read == 0) break;
+                    offset += read;
+                }
+                if (offset != bytes.Length)
+                {
+                    ModelState.AddModelError(nameof(AdHocImage), "The uploaded image could not be read completely.");
+                    OnGet();
+                    return Page();
+                }
+            }
+
+            var mediaType = DetectImageMediaType(bytes);
+            if (mediaType is null)
+            {
+                ModelState.AddModelError(nameof(AdHocImage), "Choose a PNG, JPEG, or WebP image.");
+                OnGet();
+                return Page();
+            }
+            screenshotHash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            screenshotDataUrl = $"data:{mediaType};base64,{Convert.ToBase64String(bytes)}";
+        }
+
+        var articleUrl = uri is not null
+            ? uri.GetComponents(UriComponents.HttpRequestUrl, UriFormat.UriEscaped)
+            : $"https://screenshot.invalid/{screenshotHash}";
         var existing = database.Query("SELECT id,ai_status FROM articles WHERE url=? ORDER BY id DESC LIMIT 1", articleUrl).FirstOrDefault();
         if (existing is not null)
         {
@@ -209,14 +298,22 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
             return RedirectToPage();
         }
 
-        var pageName = Uri.UnescapeDataString(uri.Segments.LastOrDefault()?.Trim('/') ?? "");
-        if (string.IsNullOrWhiteSpace(pageName)) pageName = uri.Host;
+        var pageName = uri is null ? "Social post screenshot" : Uri.UnescapeDataString(uri.Segments.LastOrDefault()?.Trim('/') ?? "");
+        if (string.IsNullOrWhiteSpace(pageName)) pageName = uri?.Host ?? "Social post screenshot";
         if (pageName.Length > 400) pageName = pageName[..400];
         var now = DateTimeOffset.UtcNow.ToString("O");
-        var feedTitle = $"Ad hoc · {uri.Host}";
-        database.Execute("INSERT INTO articles(feed_id,feed_title,title,url,summary,published_utc,first_seen_utc,ai_status) VALUES(NULL,?,?,?,?,?,?,?)",
-            feedTitle, pageName, articleUrl, "Submitted for one-off analysis.", null, now, "pending");
-        Notice = "Page added to your inbox and analysis queued. Follow its progress below.";
+        var feedTitle = uri is null ? "Ad hoc · Screenshot" : $"Ad hoc · {uri.Host}";
+        database.Execute("INSERT INTO articles(feed_id,feed_title,title,url,summary,published_utc,first_seen_utc,ai_status,screenshot_data_url) VALUES(NULL,?,?,?,?,?,?,?,?)",
+            feedTitle, pageName, articleUrl, "Submitted for one-off analysis.", null, now, "pending", screenshotDataUrl);
+        Notice = screenshotDataUrl is null ? "Page added to your inbox and analysis queued. Follow its progress below." : "Screenshot added to your inbox. AI extraction and analysis are queued.";
         return RedirectToPage();
+    }
+
+    private static string? DetectImageMediaType(byte[] bytes)
+    {
+        if (bytes.Length >= 8 && bytes.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 })) return "image/png";
+        if (bytes.Length >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff) return "image/jpeg";
+        if (bytes.Length >= 12 && System.Text.Encoding.ASCII.GetString(bytes, 0, 4) == "RIFF" && System.Text.Encoding.ASCII.GetString(bytes, 8, 4) == "WEBP") return "image/webp";
+        return null;
     }
 }

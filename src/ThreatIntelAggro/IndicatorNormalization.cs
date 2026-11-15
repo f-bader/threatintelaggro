@@ -4,13 +4,15 @@ namespace ThreatIntelAggro;
 
 public static class IndicatorNormalization
 {
+    public static string Normalize(string value) => Defang(value.Trim());
+
     // Only known, deterministic transformations are accepted; model-provided values
     // are never trusted to identify a different indicator.
     public static bool Matches(string? type, string value, string? normalized)
     {
         if (normalized is null) return true;
-        var original = Defang(value.Trim());
-        var candidate = Defang(normalized.Trim());
+        var original = Normalize(value);
+        var candidate = Normalize(normalized);
         if (original.Length == 0 || candidate.Length == 0) return false;
         switch (type?.ToLowerInvariant())
         {
