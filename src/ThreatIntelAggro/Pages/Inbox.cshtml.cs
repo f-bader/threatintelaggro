@@ -29,6 +29,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
     [BindProperty(SupportsGet = true)] public string? Category { get; set; }
     [BindProperty(SupportsGet = true)] public string Sort { get; set; } = "recent";
     [BindProperty] public string AdHocUrl { get; set; } = "";
+    [BindProperty] public List<long> SelectedIds { get; set; } = [];
 
     public void OnGet()
     {
@@ -139,6 +140,40 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
     {
         analyzer.QueueReanalysis(id);
         return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category, sort });
+    }
+
+    public IActionResult OnPostBulk(string? operation, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
+    {
+        var ids = SelectedIds.Distinct().Where(id => id > 0).Take(100).ToArray();
+        var changed = 0;
+        foreach (var id in ids)
+        {
+            switch (operation)
+            {
+                case "read":
+                    changed += database.Execute("UPDATE articles SET is_read=1 WHERE id=? AND is_read=0", id);
+                    break;
+                case "unread":
+                    changed += database.Execute("UPDATE articles SET is_read=0 WHERE id=? AND is_read=1", id);
+                    break;
+                case "analyze":
+                    var status = database.Query("SELECT ai_status FROM articles WHERE id=?", id).FirstOrDefault()?["ai_status"];
+                    if (status is "pending" or "failed") { analyzer.QueueAnalysis(id); changed++; }
+                    break;
+                case "reanalyze":
+                    if (analyzer.QueueReanalysis(id)) changed++;
+                    break;
+            }
+        }
+        Notice = operation switch
+        {
+            "read" => $"Marked {changed} article(s) as read.",
+            "unread" => $"Marked {changed} article(s) as unread.",
+            "analyze" => $"Queued {changed} article(s) for analysis or retry.",
+            "reanalyze" => $"Queued {changed} analyzed article(s) for reanalysis.",
+            _ => "No bulk action was applied."
+        };
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category, sort = sort == "priority" ? "priority" : "recent" });
     }
 
     public IActionResult OnPostAdHocAnalyze()

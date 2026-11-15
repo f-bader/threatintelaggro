@@ -421,6 +421,30 @@ public sealed class MediumFindingsTests
     }
 
     [Fact]
+    public void BulkInboxActionsOnlyChangeCompatibleSelectedArticles()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,is_read,ai_status) VALUES('Fixture','Pending','https://example.org/1','summary',?,0,'pending')", now);
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,is_read,ai_status) VALUES('Fixture','Failed','https://example.org/2','summary',?,1,'failed')", now);
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,is_read,ai_status,analysis_json) VALUES('Fixture','Complete','https://example.org/3','summary',?,0,'analyzed','{}')", now);
+        using var http = new HttpClient(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
+        using var fetcher = new SafePublicFetcher(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
+        var config = new ConfigurationBuilder().Build();
+        var service = new AnalysisService(http, fetcher, db, config, NullLogger<AnalysisService>.Instance, new AiModelSettingsService(db, config));
+        var model = new InboxModel(db, service) { SelectedIds = [1, 2, 3] };
+
+        model.OnPostBulk("read", null, null, null, null, null, null, false, null, null);
+        Assert.Equal(new[] { "1", "1", "1" }, db.Query("SELECT is_read FROM articles ORDER BY id").Select(x => x["is_read"]));
+        model.OnPostBulk("analyze", "all", null, null, null, null, null, false, null, null);
+        Assert.Equal(new[] { "pending", "pending", "analyzed" }, db.Query("SELECT ai_status FROM articles ORDER BY id").Select(x => x["ai_status"]));
+        model.OnPostBulk("reanalyze", "all", null, null, null, null, null, false, null, null);
+        Assert.Equal(new[] { "pending", "pending", "pending" }, db.Query("SELECT ai_status FROM articles ORDER BY id").Select(x => x["ai_status"]));
+        Assert.Equal("Queued 1 analyzed article(s) for reanalysis.", model.Notice);
+    }
+
+    [Fact]
     public void AiSettingsPersistDefaultsOverridesAndRevision()
     {
         using var fixture = DatabaseFixture.Create();

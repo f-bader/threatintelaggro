@@ -13,6 +13,7 @@ Use this skill whenever changing the UI in this repository.
 - Keep the existing filled square markers; labels beside them should be vertically centered. Do not add decorative numbers to workspace tabs or section markers.
 - Use the existing button styles for actions. Action links should look like buttons where they sit with buttons; reserve underlined text links for article/source navigation.
 - Keep spacing and control heights consistent across an action row. Long labels, values, and filenames should wrap without widening the page.
+- Size workspace tabs from their labels and count badges without flex-shrinking them unevenly. IOCS and SETTINGS should use their minimum content width with compact horizontal padding; longer labels such as DETECTION IDEAS may take the width they need. Keep the mobile tab grid readable and verify that labels and badges fit.
 
 ## Layout behavior
 
