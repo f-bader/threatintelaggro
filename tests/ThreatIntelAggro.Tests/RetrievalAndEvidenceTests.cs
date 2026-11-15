@@ -19,11 +19,15 @@ public sealed class RetrievalAndEvidenceTests
     [InlineData("64:ff9b::a00:1")]
     [InlineData("2002:0a00:0001::")]
     [InlineData("2001::1")]
+    [InlineData("192.0.0.1")]
+    [InlineData("192.0.2.1")]
     public void RejectsNonPublicAddresses(string address) => Assert.False(SafePublicFetcher.IsPublic(IPAddress.Parse(address)));
 
     [Theory]
     [InlineData("8.8.8.8")]
     [InlineData("2606:4700:4700::1111")]
+    [InlineData("192.0.78.137")]
+    [InlineData("192.0.78.197")]
     public void AcceptsPublicAddresses(string address) => Assert.True(SafePublicFetcher.IsPublic(IPAddress.Parse(address)));
 
     [Fact]
