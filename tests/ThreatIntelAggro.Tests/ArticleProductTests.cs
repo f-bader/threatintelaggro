@@ -64,12 +64,20 @@ public sealed class ArticleProductTests
         var article = System.Text.Json.Nodes.JsonNode.Parse(articleJson)!;
 
         ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema);
+        sources[0]!["content"] = "Acme Secure Gateway version 3.2.1\r\nis affected in healthcare.";
+        ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema);
+        sources[0]!["content"] = "Acme Secure Gateway version 3.2.1 is affected in healthcare.";
         article["products"]![0]!["affected_role"] = "unknown";
         Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
         article["products"]![0]!["affected_role"] = "exploited";
         article["industries"]![0]!["sector_id"] = "unsupported-sector";
         var sectorError = Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
         Assert.Contains("sector_id", sectorError.Message);
+        article["industries"]![0]!["sector_id"] = "healthcare";
+        article["products"]![0]!["evidence"]![0]!["excerpt"] = "Acme gateway exposure was confirmed.";
+        var sanitized = System.Text.Json.Nodes.JsonNode.Parse(ArticleEvidenceValidator.ValidateAndSanitize(article.ToJsonString(), sources, schema))!;
+        Assert.Empty(sanitized["products"]!.AsArray());
+        Assert.Single(sanitized["industries"]!.AsArray());
     }
 
     private static void Insert(AppDatabase db, string title, string product)

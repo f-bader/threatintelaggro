@@ -6,7 +6,9 @@ namespace ThreatIntelAggro;
 
 public static class ArticleEvidenceValidator
 {
-    public static void Validate(string json, JsonArray sources, JsonObject schema)
+    public static void Validate(string json, JsonArray sources, JsonObject schema) => _ = ValidateAndSanitize(json, sources, schema);
+
+    public static string ValidateAndSanitize(string json, JsonArray sources, JsonObject schema)
     {
         var root = JsonNode.Parse(json) ?? throw new InvalidOperationException("Article output is empty.");
         CheckSchema(root, schema, "article");
@@ -49,8 +51,8 @@ public static class ArticleEvidenceValidator
                 var excerpt = entry["excerpt"]!.GetValue<string>();
                 if (!ledger.TryGetValue(id, out var source) || !IsReadable(source)) Fail("IOC cites an unknown, inaccessible, or undiscovered source.");
                 var content = source!["content"]!.GetValue<string>();
-                if (string.IsNullOrWhiteSpace(entry["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !content.Contains(excerpt, StringComparison.Ordinal)) Fail("IOC excerpt does not match the stored source text.");
-                if (excerpt.Contains(value, StringComparison.OrdinalIgnoreCase)) valueFound = true;
+                if (string.IsNullOrWhiteSpace(entry["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !EvidenceContains(content, excerpt)) Fail("IOC excerpt does not match the stored source text.");
+                if (EvidenceContains(excerpt, value, StringComparison.OrdinalIgnoreCase)) valueFound = true;
             }
             if (!valueFound) Fail("IOC value is absent from its cited sources.");
             iocIndex++;
@@ -62,13 +64,27 @@ public static class ArticleEvidenceValidator
             if (sectorId is not null && sectorId.GetValueKind() != System.Text.Json.JsonValueKind.Null && !sectorIds.Contains(sectorId.GetValue<string>())) Fail("Industry sector_id is not in the supported taxonomy.");
         }
         foreach (var field in new[] { "mitre_mappings", "industries", "threat_actors", "vendors", "products", "malware", "campaigns", "vulnerabilities", "targeted_countries" })
-            foreach (var mapping in root[field]!.AsArray())
+        {
+            var mappings = root[field]!.AsArray();
+            for (var index = mappings.Count - 1; index >= 0; index--)
             {
-                CheckAssessment(mapping!);
-                var evidence = mapping!["evidence"]!.AsArray();
-                if (evidence.Count == 0) Fail("Mapping evidence is required.");
-                ValidateEvidence(evidence, ledger, true);
+                try
+                {
+                    var mapping = mappings[index]!;
+                    CheckAssessment(mapping);
+                    var evidence = mapping["evidence"]!.AsArray();
+                    if (evidence.Count == 0) Fail("Mapping evidence is required.");
+                    ValidateEvidence(evidence, ledger, true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Optional taxonomy mappings must not block otherwise valid article analysis.
+                    // Drop the unsupported mapping so unverifiable claims never reach the saved result.
+                    mappings.RemoveAt(index);
+                }
             }
+        }
+        return root.ToJsonString();
     }
 
     public static void ValidateDetection(string json, JsonArray sources, JsonObject schema)
@@ -114,13 +130,29 @@ public static class ArticleEvidenceValidator
             var id = item!["source_id"]!.GetValue<string>();
             var excerpt = item["excerpt"]!.GetValue<string>();
             if (!ledger.TryGetValue(id, out var source) || !IsReadable(source)) Fail("Evidence cites an unknown, inaccessible, or undiscovered source.");
-            if (string.IsNullOrWhiteSpace(item["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !source!["content"]!.GetValue<string>().Contains(excerpt, StringComparison.Ordinal)) Fail("Evidence excerpt does not match the stored source text.");
+            if (string.IsNullOrWhiteSpace(item["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !EvidenceContains(source!["content"]!.GetValue<string>(), excerpt, StringComparison.Ordinal)) Fail("Evidence excerpt does not match the stored source text.");
             cited.Add(id);
         }
         return cited;
     }
 
     private static bool IsReadable(JsonNode source) => source["inspection_status"]?.GetValue<string>() is "fetched" or "search_excerpt";
+
+    private static bool EvidenceContains(string source, string excerpt, StringComparison comparison = StringComparison.Ordinal)
+    {
+        if (source.Contains(excerpt, comparison)) return true;
+        return NormalizeEvidenceText(source).Contains(NormalizeEvidenceText(excerpt), comparison);
+    }
+
+    private static string NormalizeEvidenceText(string text)
+    {
+        var normalized = text.Normalize(System.Text.NormalizationForm.FormKC)
+            .Replace("\u200B", "", StringComparison.Ordinal)
+            .Replace("\u200C", "", StringComparison.Ordinal)
+            .Replace("\u200D", "", StringComparison.Ordinal)
+            .Replace("\uFEFF", "", StringComparison.Ordinal);
+        return Regex.Replace(normalized, @"\s+", " ").Trim();
+    }
 
     private static void CheckAssessment(JsonNode item)
     {

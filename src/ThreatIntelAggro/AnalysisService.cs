@@ -215,7 +215,7 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
                     articleJson = responseNode.ToJsonString();
                     rawOutput = articleJson;
                 }
-                try { ArticleEvidenceValidator.Validate(articleJson, allSources, ArticleSchema()); }
+                try { articleJson = ArticleEvidenceValidator.ValidateAndSanitize(articleJson, allSources, ArticleSchema()); }
                 catch
                 {
                     db.Execute("UPDATE analysis_responses SET status='failed',response_id=NULL,result_text=NULL WHERE article_id=? AND stage_key='article-analysis'", id);
