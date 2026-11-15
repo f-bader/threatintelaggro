@@ -476,6 +476,7 @@ h2 { margin: 3px 0 0; color: #dbe2e9; font: 700 16px var(--sans); letter-spacing
 .source-ledger-status { flex: 0 0 auto; margin-top: 1px; padding: 3px 5px; border: 1px solid #374450; color: #8795a3; font: 8px var(--mono); letter-spacing: .4px; }
 .source-ledger-status.is-read { color: #9cb9bd; border-color: #39545b; }
 .source-ledger-status.is-cited { color: #061419; border-color: var(--accent); background: var(--accent); }
+.source-ledger-status.is-excerpt { color: #e0bd83; border-color: #705a35; }
 .source-ledger-status.is-unread { color: #d4a1a2; border-color: #65464a; }
 .source-ledger li > div { min-width: 0; }
 .source-ledger a { display: block; overflow-wrap: anywhere; color: #d4e4e8; font: 600 10px/1.4 var(--sans); text-decoration: none; }

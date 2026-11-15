@@ -353,6 +353,40 @@ public sealed class MediumFindingsTests
     }
 
     [Fact]
+    public async Task DeniedArticleFetchUsesCitedSearchExcerptFallback()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        db.Execute("INSERT INTO feeds(title,url,created_utc) VALUES(?,?,?)", "Akamai Blog", "https://feeds.feedburner.com/akamai/blog", now);
+        db.Execute("INSERT INTO articles(feed_id,feed_title,title,url,summary,first_seen_utc,ai_status) VALUES(1,?,?,?,?,?,'pending')", "Akamai Blog", "AI vulnerability surge", "https://www.akamai.com/blog/ai/2026/nov/ai-vulnerability-surge-exposure-response", "Akamai reported an increase in vulnerability exposure.", now);
+        const string excerpt = "Akamai said the security issue affected internet-facing systems.";
+        var research = JsonSerializer.Serialize(new { related_sources = Array.Empty<object>(), search_excerpts = new[] { new { title = "Akamai blog", url = "https://www.akamai.com/blog/ai/2026/nov/ai-vulnerability-surge-exposure-response", excerpt } } });
+        var article = """
+        {"schema_version":"1.1","language":"en","category":"Existing Research","category_rationale":"Search excerpt supports the reported claim.","summary":{"headline":"Akamai vulnerability report","overview":"Akamai reported exposure in internet-facing systems.","key_findings":[],"evidence":[{"source_id":"src_article","locator":"web search excerpt","excerpt":"__EXCERPT__"}]},"iocs":[],"references":[{"source_id":"src_article","url":"https://www.akamai.com/blog/ai/2026/nov/ai-vulnerability-surge-exposure-response","title":"AI vulnerability surge","kind":"original","inspection_status":"search_excerpt","relevance":"original"}],"mitre_mappings":[],"industries":[],"threat_actors":[],"vendors":[],"products":[],"malware":[],"campaigns":[],"vulnerabilities":[],"targeted_countries":[],"detection_assessment":{"potential":"uncertain","reason":"Insufficient detail.","evidence":[]},"coverage":{"limitations":["Original page was only available as a web-search excerpt."],"uninspected_source_ids":[],"conflicting_claims":[]}}
+        """.Replace("__EXCERPT__", excerpt, StringComparison.Ordinal);
+        const string detections = "{\"schema_version\":\"1.1\",\"outcome\":\"no_supported_detection\",\"reason\":\"No behavior detail.\",\"detections\":[],\"coverage\":[]}";
+        var citedUrl = "https://www.akamai.com/blog/ai/2026/nov/ai-vulnerability-surge-exposure-response";
+        var apiHandler = new FallbackAnalysisHandler([research, article, detections], citedUrl, "Akamai blog");
+        using var http = new HttpClient(apiHandler);
+        using var fetcher = new SafePublicFetcher(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.Forbidden)));
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["OpenAI:ApiKey"] = "fixture" }).Build();
+        var settings = new AiModelSettingsService(db, config);
+        settings.Save(new AiModelSettings("fixture-model", "high"));
+        var service = new AnalysisService(http, fetcher, db, config, NullLogger<AnalysisService>.Instance, settings);
+
+        Assert.True(await service.AnalyzeOneAsync(1));
+        var request = apiHandler.Requests[0];
+        Assert.Equal("required", request.GetProperty("tool_choice").GetString());
+        Assert.Equal("web_search", request.GetProperty("tools")[0].GetProperty("type").GetString());
+        Assert.Equal("", db.Query("SELECT content_text FROM articles WHERE id=1")[0]["content_text"]);
+        using (var ledger = JsonDocument.Parse(db.Query("SELECT source_ledger_json FROM articles WHERE id=1")[0]["source_ledger_json"]!))
+            Assert.Equal("search_excerpt", ledger.RootElement.EnumerateArray().Single(x => x.GetProperty("source_id").GetString() == "src_article").GetProperty("inspection_status").GetString());
+        Assert.Equal(excerpt, db.Query("SELECT content FROM source_snapshots WHERE article_id=1 AND source_id='src_article'")[0]["content"]);
+        Assert.Contains(citedUrl, db.Query("SELECT search_citations_json FROM analysis_responses WHERE article_id=1 AND stage_key='research'")[0]["search_citations_json"]);
+    }
+
+    [Fact]
     public void AiSettingsPersistDefaultsOverridesAndRevision()
     {
         using var fixture = DatabaseFixture.Create();
@@ -408,6 +442,26 @@ public sealed class MediumFindingsTests
                 : "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"valid\":true}}}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
         }
+    }
+
+    private sealed class FallbackAnalysisHandler(string[] stages, string citedUrl, string citedTitle) : HttpMessageHandler
+    {
+        private int _index;
+        public List<JsonElement> Requests { get; } = [];
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult());
+            Requests.Add(body.RootElement.Clone());
+            var index = _index++;
+            var annotation = new { type = "url_citation", url = citedUrl, title = citedTitle, start_index = 0, end_index = 10 };
+            var response = JsonSerializer.Serialize(new { id = $"resp_fixture_{index}", status = "completed", output = new[] { new { type = "message", content = new[] { new { type = "output_text", text = stages[index], annotations = index == 0 ? new[] { annotation } : Array.Empty<object>() } } } } });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(response, Encoding.UTF8, "application/json") });
+        }
+    }
+
+    private sealed class StaticResponseHandler(Func<HttpRequestMessage, HttpResponseMessage> response) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(response(request));
     }
 
     private sealed class DatabaseFixture(string directory, AppDatabase database) : IDisposable

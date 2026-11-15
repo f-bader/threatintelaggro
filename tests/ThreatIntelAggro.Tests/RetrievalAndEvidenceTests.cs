@@ -98,6 +98,13 @@ public sealed class RetrievalAndEvidenceTests
          "detection_assessment":{"potential":"uncertain","reason":"fixture","evidence":[]},"coverage":{"limitations":[],"uninspected_source_ids":[],"conflicting_claims":[]}}
         """)!;
         ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema);
+        sources[0]!["inspection_status"] = "search_excerpt";
+        article["references"]![0]!["inspection_status"] = "search_excerpt";
+        ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema);
+        sources[0]!["inspection_status"] = "inaccessible";
+        Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
+        sources[0]!["inspection_status"] = "fetched";
+        article["references"]![0]!["inspection_status"] = "fetched";
         var summaryEvidence = article["summary"]!["evidence"]!.DeepClone();
         article["summary"]!["evidence"] = new JsonArray();
         Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
@@ -129,6 +136,11 @@ public sealed class RetrievalAndEvidenceTests
         {"schema_version":"1.1","outcome":"drafts_generated","reason":"fixture","coverage":[],"detections":[{"local_key":"test","alert_title":"test","description":"test","severity":"low","rationale":"test","kql":"DeviceEvents | take 1","tactic":"Execution","techniques":[],"behaviors":[{"description":"file write","basis":"source_reported","confidence":"high","evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"The process wrote a file."}]}],"source_ids":["src_article"],"playbook":{"title":"test","triage_steps":[],"investigation_steps":[],"response_options":[]},"mitre_mappings":[],"telemetry":{"tables":[],"required_columns":[],"assumptions":[],"known_gaps":[]}}]}
         """)!;
         ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema);
+        sources[0]!["inspection_status"] = "search_excerpt";
+        ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema);
+        sources[0]!["inspection_status"] = "inaccessible";
+        Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema));
+        sources[0]!["inspection_status"] = "fetched";
         detection["detections"]![0]!["behaviors"]![0]!["evidence"]![0]!["source_id"] = "invented";
         Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema));
         detection["detections"]![0]!["behaviors"]![0]!["evidence"]![0]!["source_id"] = "src_article";

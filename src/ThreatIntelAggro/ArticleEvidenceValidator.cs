@@ -47,9 +47,9 @@ public static class ArticleEvidenceValidator
             {
                 var id = entry!["source_id"]!.GetValue<string>();
                 var excerpt = entry["excerpt"]!.GetValue<string>();
-                if (!ledger.TryGetValue(id, out var source) || source!["inspection_status"]!.GetValue<string>() != "fetched") Fail("IOC cites an unknown or unfetched source.");
+                if (!ledger.TryGetValue(id, out var source) || !IsReadable(source)) Fail("IOC cites an unknown, inaccessible, or undiscovered source.");
                 var content = source!["content"]!.GetValue<string>();
-                if (string.IsNullOrWhiteSpace(entry["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !content.Contains(excerpt, StringComparison.Ordinal)) Fail("IOC excerpt does not match the fetched source.");
+                if (string.IsNullOrWhiteSpace(entry["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !content.Contains(excerpt, StringComparison.Ordinal)) Fail("IOC excerpt does not match the stored source text.");
                 if (excerpt.Contains(value, StringComparison.OrdinalIgnoreCase)) valueFound = true;
             }
             if (!valueFound) Fail("IOC value is absent from its cited sources.");
@@ -95,7 +95,7 @@ public static class ArticleEvidenceValidator
                 cited.UnionWith(ValidateEvidence(mapping!["evidence"]!.AsArray(), ledger, true));
             }
             var declared = detection["source_ids"]!.AsArray().Select(x => x!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
-            if (declared.Count == 0 || declared.Any(id => !ledger.TryGetValue(id, out var source) || source["inspection_status"]!.GetValue<string>() != "fetched") || !cited.IsSubsetOf(declared)) Fail("Detection source IDs do not match fetched evidence.");
+            if (declared.Count == 0 || declared.Any(id => !ledger.TryGetValue(id, out var source) || !IsReadable(source)) || !cited.IsSubsetOf(declared)) Fail("Detection source IDs do not match readable evidence.");
         }
     }
 
@@ -107,12 +107,14 @@ public static class ArticleEvidenceValidator
         {
             var id = item!["source_id"]!.GetValue<string>();
             var excerpt = item["excerpt"]!.GetValue<string>();
-            if (!ledger.TryGetValue(id, out var source) || source["inspection_status"]!.GetValue<string>() != "fetched") Fail("Evidence cites an unknown or unfetched source.");
-            if (string.IsNullOrWhiteSpace(item["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !source!["content"]!.GetValue<string>().Contains(excerpt, StringComparison.Ordinal)) Fail("Evidence excerpt does not match its fetched source.");
+            if (!ledger.TryGetValue(id, out var source) || !IsReadable(source)) Fail("Evidence cites an unknown, inaccessible, or undiscovered source.");
+            if (string.IsNullOrWhiteSpace(item["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !source!["content"]!.GetValue<string>().Contains(excerpt, StringComparison.Ordinal)) Fail("Evidence excerpt does not match the stored source text.");
             cited.Add(id);
         }
         return cited;
     }
+
+    private static bool IsReadable(JsonNode source) => source["inspection_status"]?.GetValue<string>() is "fetched" or "search_excerpt";
 
     private static void CheckAssessment(JsonNode item)
     {

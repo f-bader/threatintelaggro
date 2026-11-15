@@ -48,7 +48,7 @@ public sealed class AppDatabase : IDisposable
                 CREATE TABLE IF NOT EXISTS analysis_responses (
                     article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
                     stage_key TEXT NOT NULL, response_id TEXT, status TEXT NOT NULL DEFAULT 'submitting',
-                    result_text TEXT, error TEXT, updated_utc TEXT NOT NULL,
+                    result_text TEXT, error TEXT, search_citations_json TEXT NOT NULL DEFAULT '[]', updated_utc TEXT NOT NULL,
                     requested_model TEXT NOT NULL DEFAULT '', actual_model TEXT, reasoning_effort TEXT, config_revision INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(article_id,stage_key)
                 );
@@ -104,7 +104,8 @@ public sealed class AppDatabase : IDisposable
                 "ALTER TABLE analysis_responses ADD COLUMN requested_model TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE analysis_responses ADD COLUMN actual_model TEXT",
                 "ALTER TABLE analysis_responses ADD COLUMN reasoning_effort TEXT",
-                "ALTER TABLE analysis_responses ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 0"
+                "ALTER TABLE analysis_responses ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE analysis_responses ADD COLUMN search_citations_json TEXT NOT NULL DEFAULT '[]'"
             }) { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
             Exec("UPDATE detections SET guid=lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-a' || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))) WHERE guid=''");
             Exec("UPDATE articles SET ai_status='pending',ai_error=NULL WHERE ai_status='analyzing'");

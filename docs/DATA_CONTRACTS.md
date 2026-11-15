@@ -2,7 +2,7 @@
 
 These are implementation specifications for versioned JSON Schema contracts. The implementation milestone will materialize them as strict schemas and C# records, using the provider-supported JSON Schema subset for generation and full local validation before persistence. Examples below are synthetic and contain no generated detection query.
 
-**Implementation status:** New article and detection outputs use schema `1.1`; previously saved `1.0` output remains readable. The implemented schemas are defined in `AnalysisService.cs`, and `ArticleEvidenceValidator.cs` verifies fetched source IDs and exact excerpts for summaries, findings, indicators, mappings and detection behaviors. The richer mapping specializations, taxonomy checks and several additional detection fields described below remain design targets rather than implemented guarantees. An exact excerpt establishes provenance, not that a claim or KQL query is correct.
+**Implementation status:** New article and detection outputs use schema `1.1`; previously saved `1.0` output remains readable. The implemented schemas are defined in `AnalysisService.cs`, and `ArticleEvidenceValidator.cs` verifies fetched or citation-backed search-excerpt source IDs and exact excerpts for summaries, findings, indicators, mappings and detection behaviors. A search excerpt is stored and displayed as `search_excerpt`; it does not imply that the full page was fetched. The richer mapping specializations, taxonomy checks and several additional detection fields described below remain design targets rather than implemented guarantees. An exact excerpt establishes provenance, not that a claim or KQL query is correct.
 
 ## Shared conventions
 
@@ -13,7 +13,7 @@ These are implementation specifications for versioned JSON Schema contracts. The
 - Every factual mapping, IOC, and detection behavior has evidence. Inferences must explain the link. Unsupported attribution stays empty rather than becoming an inferred actor.
 - Evidence item: `{ "source_id": "src_…", "locator": "paragraph 4", "excerpt": "short supporting text" }`. `locator` may identify paragraphs, PDF pages, or immutable code path/line ranges. Verify the excerpt exists in the supplied snapshot; treat normalization differences explicitly. Excerpts are short, not a substitute for the stored source.
 - The application allocates source IDs and records retrieved content. The model may only cite known source IDs. All reference URLs/titles/statuses must match the source ledger; never trust invented model URLs as fetched evidence.
-- For search-only evidence, label `search_excerpt`; it cannot claim the full page or code was parsed. An inaccessible source may be a reference but cannot support a claim of inspected code behavior.
+- For search-only evidence, label `search_excerpt` and tie it to a URL citation returned by the search provider; it cannot claim the full page or code was parsed. An inaccessible source may be a reference but cannot support a claim of inspected code behavior.
 - Display confidence, basis, evidence, and truncation together. Empty fields mean no supported information, not proof that a threat does not exist.
 
 ## 1. Article enrichment output
