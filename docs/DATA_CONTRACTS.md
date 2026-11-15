@@ -2,7 +2,7 @@
 
 These are implementation specifications for versioned JSON Schema contracts. The implementation milestone will materialize them as strict schemas and C# records, using the provider-supported JSON Schema subset for generation and full local validation before persistence. Examples below are synthetic and contain no generated detection query.
 
-**Implementation status:** New article and detection outputs use schema `1.1`; previously saved `1.0` output remains readable. The implemented schemas are defined in `AnalysisService.cs`, and `ArticleEvidenceValidator.cs` verifies fetched or citation-backed search-excerpt source IDs and exact excerpts for summaries, findings, indicators, mappings and detection behaviors. A search excerpt is stored and displayed as `search_excerpt`; it does not imply that the full page was fetched. The richer mapping specializations, taxonomy checks and several additional detection fields described below remain design targets rather than implemented guarantees. An exact excerpt establishes provenance, not that a claim or KQL query is correct.
+**Implementation status:** New article outputs use schema `1.2`; detection outputs use `1.1`. Previously saved article `1.0` and `1.1` JSON remains readable and is not reanalyzed on upgrade. The article contract now requires targeted industry `sector_id` (nullable) and product `vendor_name`, `affected_versions`, and `affected_role`; industry IDs and product roles are locally validated. The implemented schemas are defined in `AnalysisService.cs`, and `ArticleEvidenceValidator.cs` verifies fetched or citation-backed search-excerpt source IDs and exact excerpts for summaries, findings, indicators, mappings and detection behaviors. A search excerpt is stored and displayed as `search_excerpt`; it does not imply that the full page was fetched. Other richer mapping specializations and several additional detection fields below remain design targets rather than implemented guarantees. An exact excerpt establishes provenance, not that a claim or KQL query is correct.
 
 ## Shared conventions
 
@@ -20,16 +20,16 @@ These are implementation specifications for versioned JSON Schema contracts. The
 
 | Field | Type / semantics |
 | --- | --- |
-| schema_version | Constant `1.0` |
+| schema_version | Constant `1.2` for new analysis output; existing `1.0` and `1.1` records remain readable |
 | language | Source language code or `null` |
 | summary | Object: `headline`, `overview`, `key_findings[]`; each finding contains `text`, `basis`, `confidence`, `evidence[]` |
 | iocs | List of typed indicators with context and evidence |
 | references | Original article and discovered related report/document/code references |
 | mitre_mappings | Supported tactic/technique/sub-technique mappings |
-| industries | Targeted victim-sector mappings |
+| industries | Targeted victim-sector mappings with nullable app-taxonomy `sector_id` |
 | threat_actors | Actor names and source-reported aliases, without guessed attribution |
 | vendors | Affected product vendors, not reporting publishers |
-| products | Affected products and supported vendor/version relationships |
+| products | Affected products, nullable supported `vendor_name`, `affected_versions[]`, and `affected_role` (`exploited`, `abused`, `impersonated`, `mentioned_affected`) |
 | malware | Malware family/tool names with role and attribution basis |
 | campaigns | Named campaigns, only when supported |
 | vulnerabilities | CVE IDs and source-supported affected-product relationships |
@@ -65,7 +65,7 @@ Minimal synthetic article output:
 
 ```json
 {
-  "schema_version": "1.0",
+    "schema_version": "1.2",
   "language": "en",
   "summary": {
     "headline": "Synthetic source with insufficient technical detail",

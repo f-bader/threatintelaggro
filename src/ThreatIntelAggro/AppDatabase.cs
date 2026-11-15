@@ -70,7 +70,7 @@ public sealed class AppDatabase : IDisposable
                     UNIQUE(article_id,local_key)
                 );
                 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS briefing_follows (id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL CHECK(kind IN ('vendor','industry')),name TEXT NOT NULL,is_enabled INTEGER NOT NULL DEFAULT 1,is_custom INTEGER NOT NULL DEFAULT 0,UNIQUE(kind,name COLLATE NOCASE));
+                CREATE TABLE IF NOT EXISTS briefing_follows (id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL CHECK(kind IN ('vendor','industry','product')),name TEXT NOT NULL,is_enabled INTEGER NOT NULL DEFAULT 1,is_custom INTEGER NOT NULL DEFAULT 0,UNIQUE(kind,name COLLATE NOCASE));
                 CREATE TABLE IF NOT EXISTS briefings (id INTEGER PRIMARY KEY AUTOINCREMENT,window_start_utc TEXT NOT NULL,window_end_utc TEXT NOT NULL,created_utc TEXT NOT NULL,title TEXT NOT NULL,executive_summary TEXT NOT NULL,detection_summary TEXT NOT NULL,ioc_summary TEXT NOT NULL,article_ids_json TEXT NOT NULL,article_snapshot_json TEXT NOT NULL,markdown TEXT NOT NULL,UNIQUE(window_start_utc,window_end_utc));
                 CREATE INDEX IF NOT EXISTS ix_briefings_created ON briefings(created_utc DESC);
                 CREATE TABLE IF NOT EXISTS article_ai_config (article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,config_json TEXT NOT NULL);
@@ -97,6 +97,11 @@ public sealed class AppDatabase : IDisposable
                 "ALTER TABLE articles ADD COLUMN category TEXT NOT NULL DEFAULT 'Existing Research'",
                 "ALTER TABLE articles ADD COLUMN category_manual INTEGER NOT NULL DEFAULT 0"
             }) { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
+            var followDefinition = Query("SELECT sql FROM sqlite_master WHERE type='table' AND name='briefing_follows'").FirstOrDefault()?.GetValueOrDefault("sql") ?? "";
+            if (!followDefinition.Contains("'product'", StringComparison.OrdinalIgnoreCase))
+            {
+                Exec("BEGIN IMMEDIATE; CREATE TABLE briefing_follows_new (id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL CHECK(kind IN ('vendor','industry','product')),name TEXT NOT NULL,is_enabled INTEGER NOT NULL DEFAULT 1,is_custom INTEGER NOT NULL DEFAULT 0,UNIQUE(kind,name COLLATE NOCASE)); INSERT INTO briefing_follows_new(id,kind,name,is_enabled,is_custom) SELECT id,kind,name,is_enabled,is_custom FROM briefing_follows; DROP TABLE briefing_follows; ALTER TABLE briefing_follows_new RENAME TO briefing_follows; COMMIT;");
+            }
             foreach (var migration in new[] { "ALTER TABLE detections ADD COLUMN xdr_tactic TEXT NOT NULL DEFAULT ''", "ALTER TABLE detections ADD COLUMN xdr_techniques_json TEXT NOT NULL DEFAULT '[]'", "ALTER TABLE detections ADD COLUMN behaviors_json TEXT NOT NULL DEFAULT '[]'", "ALTER TABLE detections ADD COLUMN source_ids_json TEXT NOT NULL DEFAULT '[]'" })
             { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
             try { Exec("ALTER TABLE detections ADD COLUMN guid TEXT NOT NULL DEFAULT ''"); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { }

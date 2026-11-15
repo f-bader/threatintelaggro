@@ -9,19 +9,20 @@
 <section class="panel briefing-settings-panel"><div class="panel-head"><div><div class="eyebrow">DAILY INTELLIGENCE</div><h2>Threat briefing</h2></div><span class="api-key-status @(Model.BriefingEnabled ? "is-active" : "is-missing")">@(Model.BriefingEnabled ? "SCHEDULED" : "PAUSED")</span></div>
 <form method="post" asp-page-handler="SaveBriefing" class="briefing-settings-form"><label class="briefing-enable"><input asp-for="BriefingEnabledInput" type="checkbox"/><span>Enable daily briefing generation</span></label><label>Generation time · UTC<input asp-for="BriefingTimeInput" type="time" required/></label><label class="briefing-prompt-label">Generation system prompt<textarea asp-for="BriefingPromptInput" rows="7" maxlength="10000"></textarea><small>Used for future generations. Leave blank and save to restore the default. Article content is treated as untrusted evidence.</small></label><button class="button button-primary" type="submit">SAVE BRIEFING SETTINGS</button></form>
 <div class="briefing-follow-controls" id="briefing-follows">
-  <div class="briefing-follow-heading"><div class="eyebrow">FOLLOWED VENDORS & INDUSTRIES</div><p class="form-footnote">Type to find names from analyzed articles or add a custom name. Matching is fuzzy and reports why an article matched.</p></div>
+  <div class="briefing-follow-heading"><div class="eyebrow">FOLLOWED VENDORS, INDUSTRIES & PRODUCTS</div><p class="form-footnote">Type to find names from analyzed articles or add a custom name. Matching is fuzzy and reports why an article matched.</p></div>
   <datalist id="briefing-vendors">@foreach (var name in Model.AvailableBriefingVendors) { <option value="@name"></option> }</datalist>
   <datalist id="briefing-industries">@foreach (var name in Model.AvailableBriefingIndustries) { <option value="@name"></option> }</datalist>
+  <datalist id="briefing-products">@foreach (var name in Model.AvailableBriefingProducts) { <option value="@name"></option> }</datalist>
   <form method="post" asp-page-handler="AddBriefingFollow" class="briefing-follow-add" autocomplete="off">
-    <select asp-for="FollowKind" aria-label="Name type"><option value="vendor">Affected vendor</option><option value="industry">Industry</option></select>
+    <select asp-for="FollowKind" aria-label="Name type"><option value="vendor">Affected vendor</option><option value="industry">Targeted industry</option><option value="product">Affected product</option></select>
     <div class="briefing-follow-input-wrap">
-      <input asp-for="FollowName" placeholder="Type a vendor or industry name" maxlength="100" required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="briefing-follow-suggestions" aria-label="Search or add a followed name"/>
+      <input asp-for="FollowName" placeholder="Type a vendor, industry, or product name" maxlength="200" required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="briefing-follow-suggestions" aria-label="Search or add a followed name"/>
       <div class="briefing-follow-suggestions" id="briefing-follow-suggestions" role="listbox" aria-label="Name suggestions" hidden></div>
     </div>
     <button class="button button-secondary briefing-follow-custom-submit" type="submit">+ ADD CUSTOM</button>
   </form>
-  @if (Model.BriefingFollows.Count == 0) { <p class="form-footnote briefing-follow-empty">No vendors or industries followed yet.</p> } else {
-    <div class="briefing-follow-list" aria-label="Followed vendors and industries">
+  @if (Model.BriefingFollows.Count == 0) { <p class="form-footnote briefing-follow-empty">No vendors, industries, or products followed yet.</p> } else {
+    <div class="briefing-follow-list" aria-label="Followed vendors, industries, and products">
       @foreach (var follow in Model.BriefingFollows) {
         var isEnabled = follow["is_enabled"] == "1";
         <div class="briefing-follow-chip @(isEnabled ? "is-enabled" : "is-disabled")" data-kind="@follow["kind"]" data-name="@follow["name"]">
@@ -112,7 +113,8 @@
   if (briefingFollowForm && briefingFollowKind && briefingFollowName && briefingFollowSuggestions && briefingFollowCustomButton) {
     const catalogByKind = {
       vendor: Array.from(document.querySelectorAll('#briefing-vendors option'), option => option.value),
-      industry: Array.from(document.querySelectorAll('#briefing-industries option'), option => option.value)
+      industry: Array.from(document.querySelectorAll('#briefing-industries option'), option => option.value),
+      product: Array.from(document.querySelectorAll('#briefing-products option'), option => option.value)
     };
     let activeSuggestion = -1;
     const closeSuggestions = () => {

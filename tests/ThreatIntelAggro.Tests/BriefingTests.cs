@@ -25,18 +25,27 @@ public sealed class BriefingTests
         var end = DateTimeOffset.UtcNow; var start = end.AddDays(-1);
         IocExclusionSettings.Set(db, "briefing_prompt", "Daily prompt");
         db.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES('vendor','Microsoft',1,0)");
+        db.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES('product','Azure SQL',1,0)");
         InsertPendingArticle(db, end.AddHours(-4));
         InsertArticle(db, "Microsoft security advisory", end.AddHours(-1), "Azure SQL data theft investigated.", "Microsofft");
-        InsertArticle(db, "Unrelated advisory", end.AddHours(-2), "A generic issue.", "Acme Systems");
+        InsertArticle(db, "Unrelated advisory", end.AddHours(-2), "A generic issue.", "Acme Systems", "Other Router");
         Assert.Equal(1, await service.GenerateAsync(end));
         Assert.Equal(0, await service.GenerateAsync(end));
         Assert.Single(service.Archive);
         Assert.Single(writer.Articles);
         Assert.Contains("fuzzy similarity", writer.Articles[0].VendorMatchReasons[0]);
+        Assert.Equal("Azure SQL", writer.Articles[0].ProductMatches);
+        Assert.Contains("exact name", writer.Articles[0].ProductMatchReasons[0]);
         Assert.Equal("Daily prompt", writer.Prompt);
         Assert.True(service.HasInProgressAnalysis(end));
         var row = service.Get(long.Parse(service.Archive[0]["id"]!))!;
         Assert.Contains("Microsoft security advisory", row["markdown"]);
+        Assert.Contains("products: Azure SQL", row["markdown"]);
+        using (var snapshot = System.Text.Json.JsonDocument.Parse(row["article_snapshot_json"]!))
+        {
+            Assert.Equal("Azure SQL", BriefingView.ProductMatches(snapshot.RootElement[0]));
+            Assert.Contains("Azure SQL matched article value Azure SQL", BriefingView.MatchReasons(snapshot.RootElement[0]));
+        }
         Assert.Contains("1 suspicious domain", row["ioc_summary"]);
         Assert.Equal("1", db.Query("SELECT COUNT(*) AS count FROM briefings")[0]["count"]);
         Assert.Equal(0, await service.GenerateAsync(end.AddDays(-4)));
@@ -48,6 +57,14 @@ public sealed class BriefingTests
         Assert.Contains("Detection summary", rss);
         Assert.Contains("https://example.test/Microsoft%20security%20advisory", rss);
         Assert.True(end.AddDays(-1) < end);
+    }
+
+    [Fact]
+    public void Legacy_briefing_snapshots_without_product_fields_remain_readable()
+    {
+        using var article = System.Text.Json.JsonDocument.Parse("""{"VendorMatches":"Microsoft","IndustryMatches":"Healthcare","VendorMatchReasons":[],"IndustryMatchReasons":[]}""");
+        Assert.Equal("", BriefingView.ProductMatches(article.RootElement));
+        Assert.Equal("", BriefingView.MatchReasons(article.RootElement));
     }
 
     [Fact]
@@ -87,10 +104,10 @@ public sealed class BriefingTests
         Assert.Equal(100_000 + Environment.NewLine.Length + "[truncated]".Length, row["raw_output"]!.Length);
     }
 
-    private static void InsertArticle(AppDatabase db, string title, DateTimeOffset published, string overview, string vendor)
+    private static void InsertArticle(AppDatabase db, string title, DateTimeOffset published, string overview, string vendor, string product = "Azure SQL")
     {
         var analysis = $$"""
-        {"schema_version":"1.1","summary":{"headline":"{{title}}","overview":"{{overview}}","key_findings":[],"evidence":[]},"vendors":[{"name":"{{vendor}}"}],"industries":[{"name":"Healthcare"}],"iocs":[{"type":"domain","value":"bad.example","role":"suspicious"}]}
+        {"schema_version":"1.2","summary":{"headline":"{{title}}","overview":"{{overview}}","key_findings":[],"evidence":[]},"vendors":[{"name":"{{vendor}}"}],"industries":[{"name":"Healthcare","sector_id":"healthcare"}],"products":[{"name":"{{product}}","vendor_name":"Microsoft","affected_versions":[],"affected_role":"mentioned_affected"}],"iocs":[{"type":"domain","value":"bad.example","role":"suspicious"}]}
         """;
         var date = published.ToString("O");
         db.Execute("INSERT INTO articles(feed_title,title,url,summary,published_utc,first_seen_utc,ai_status,analysis_json,evidence_verified) VALUES('Fixture',?,?,?,?,?,'analyzed',?,1)", title, $"https://example.test/{Uri.EscapeDataString(title)}", overview, date, date, analysis);

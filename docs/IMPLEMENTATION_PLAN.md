@@ -165,11 +165,11 @@ Use a compact dark interface with accessible contrast, keyboard focus, responsiv
 | View | Main behavior |
 | --- | --- |
 | Articles | Default unread/newest; sortable date, feed, title, processing state; filters for read state, date, feed, actor, industry, affected vendor/product, MITRE, malware, CVE, country, IOC type, detection availability |
-| Article detail | Linked original title, summary, confidence/evidence badges, IOC table, mappings, related references, code coverage/skips, linked detections, raw/effective JSON |
+| Article detail | Linked original title, summary, confidence/evidence badges, IOC table, mappings (including affected products with vendor/version/impact role), related references, code coverage/skips, linked detections, raw/effective JSON |
 | Detection ideas | Sort/filter by created date, severity, workflow, validation, source, technique, required table, and archived state; text search and linked article |
 | Detection detail | KQL in a readable monospace block with copy/download; downloadable XDRConverter-compatible `.yaml` and JSON; alert metadata, rationale, code/behavior evidence, telemetry gaps, diagnostics, false positives, tuning, playbook, notes and revisions |
 | Feeds | Add/edit/remove/pause/refresh; interval, last success, accessible backfill range, backlog and errors |
-| Settings/status | Provider/model/effort, credential-presence indicator, MCP health, research limits, domain preferences, job queue, usage and backup status |
+| Settings/status | Provider/model/effort, credential-presence indicator, MCP health, research limits, domain preferences, job queue, usage and backup status; briefing follows support affected vendors, targeted industries, and affected products |
 
 Read state is explicit: opening an article never marks it read. Include bulk mark read/unread with a clear selection count. Single-owner states need no multi-user schema now.
 

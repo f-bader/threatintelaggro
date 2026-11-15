@@ -8,6 +8,7 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
     public IReadOnlyList<Dictionary<string, string?>> BriefingFollows { get; private set; } = [];
     public IReadOnlyList<string> AvailableBriefingVendors { get; private set; } = [];
     public IReadOnlyList<string> AvailableBriefingIndustries { get; private set; } = [];
+    public IReadOnlyList<string> AvailableBriefingProducts { get; private set; } = [];
     public bool BriefingEnabled { get; private set; } = true;
     public string BriefingTimeUtc { get; private set; } = "06:00";
     public string BriefingPrompt { get; private set; } = BriefingService.DefaultPrompt;
@@ -146,8 +147,8 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
     public IActionResult OnPostAddBriefingFollow()
     {
         FollowName = (FollowName ?? "").Trim();
-        if (FollowKind is not ("vendor" or "industry") || FollowName.Length is < 2 or > 100)
-        { Notice = "Choose a vendor or industry and enter a name between 2 and 100 characters."; Load(); return Page(); }
+        if (FollowKind is not ("vendor" or "industry" or "product") || FollowName.Length is < 2 or > 200)
+        { Notice = "Choose a vendor, industry, or product and enter a name between 2 and 200 characters."; Load(); return Page(); }
         var kind = FollowKind;
         var existing = briefings.Available(kind);
         database.Execute("INSERT OR IGNORE INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES(?,?,1,?)", kind, FollowName, existing.Contains(FollowName, StringComparer.OrdinalIgnoreCase) ? 0 : 1);
@@ -235,6 +236,7 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
         BriefingFollows = database.Query("SELECT * FROM briefing_follows ORDER BY kind,name COLLATE NOCASE");
         AvailableBriefingVendors = briefings.Available("vendor");
         AvailableBriefingIndustries = briefings.Available("industry");
+        AvailableBriefingProducts = briefings.Available("product");
         BriefingEnabled = IocExclusionSettings.Get(database, "briefing_enabled") != "false";
         var savedTime = IocExclusionSettings.Get(database, "briefing_time_utc");
         BriefingTimeUtc = TimeOnly.TryParse(savedTime, out var configuredTime) ? configuredTime.ToString("HH:mm") : "06:00";

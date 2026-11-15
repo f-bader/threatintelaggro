@@ -12,10 +12,11 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
     public int TotalCount { get; private set; }
     public string[] Industries { get; private set; } = [];
     public string[] Vendors { get; private set; } = [];
+    public string[] Products { get; private set; } = [];
     public string[] MitreMappings { get; private set; } = [];
     public string[] ThreatActors { get; private set; } = [];
     public string[] CategoryOptions => ArticleCategories.PriorityOrder;
-    public int ActiveFilterCount => new[] { Industry, Vendor, Mitre, ThreatActor, Category }.Count(x => !string.IsNullOrWhiteSpace(x));
+    public int ActiveFilterCount => new[] { Industry, Vendor, Product, Mitre, ThreatActor, Category }.Count(x => !string.IsNullOrWhiteSpace(x));
     public string[] VisibleIocs(System.Text.Json.JsonElement root, string? articleId) => IocIndex.IocValues(database, root, articleId);
     public int DetectionCount(string? articleId) => long.TryParse(articleId, out var id) ? database.ScalarInt("SELECT COUNT(*) FROM detections WHERE article_id=?", id) : 0;
     [TempData] public string? Notice { get; set; }
@@ -23,6 +24,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
     [BindProperty(SupportsGet = true)] public string State { get; set; } = "unread";
     [BindProperty(SupportsGet = true)] public string? Industry { get; set; }
     [BindProperty(SupportsGet = true)] public string? Vendor { get; set; }
+    [BindProperty(SupportsGet = true)] public string? Product { get; set; }
     [BindProperty(SupportsGet = true)] public string? Mitre { get; set; }
     [BindProperty(SupportsGet = true)] public string? ThreatActor { get; set; }
     [BindProperty(SupportsGet = true)] public bool FiltersOpen { get; set; }
@@ -42,6 +44,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
         TotalCount = database.ScalarInt("SELECT COUNT(*) FROM articles");
         Industries = IocIndex.Options(database, "industries");
         Vendors = IocIndex.Options(database, "vendors");
+        Products = IocIndex.Options(database, "products");
         MitreMappings = IocIndex.Options(database, "mitre_mappings");
         ThreatActors = IocIndex.Options(database, "threat_actors");
         var conditions = new List<string>();
@@ -87,7 +90,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
     {
         if (ArticleCategories.IsValid(selectedCategory))
             database.Execute("UPDATE articles SET category=?,category_manual=1 WHERE id=?", ArticleCategories.Normalize(selectedCategory), id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category = categoryFilter, sort = sort == "priority" ? "priority" : "recent" });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category = categoryFilter, sort = sort == "priority" ? "priority" : "recent" });
     }
 
     private void RefreshAdHocSummaries()
@@ -106,13 +109,13 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
 
     private bool MatchesMappings(Dictionary<string, string?> article)
     {
-        if (string.IsNullOrWhiteSpace(Industry) && string.IsNullOrWhiteSpace(Vendor) && string.IsNullOrWhiteSpace(Mitre) && string.IsNullOrWhiteSpace(ThreatActor)) return true;
+        if (string.IsNullOrWhiteSpace(Industry) && string.IsNullOrWhiteSpace(Vendor) && string.IsNullOrWhiteSpace(Product) && string.IsNullOrWhiteSpace(Mitre) && string.IsNullOrWhiteSpace(ThreatActor)) return true;
         if (string.IsNullOrWhiteSpace(article["analysis_json"])) return false;
         try
         {
             using var json = System.Text.Json.JsonDocument.Parse(article["analysis_json"]!);
             var root = json.RootElement;
-            return Includes("industries", Industry) && Includes("vendors", Vendor) && Includes("mitre_mappings", Mitre) && Includes("threat_actors", ThreatActor);
+            return Includes("industries", Industry) && Includes("vendors", Vendor) && Includes("products", Product) && Includes("mitre_mappings", Mitre) && Includes("threat_actors", ThreatActor);
             bool Includes(string field, string? selected) => string.IsNullOrWhiteSpace(selected) || IocIndex.Values(root, field).Any(x => x.Equals(selected, StringComparison.OrdinalIgnoreCase));
         }
         catch (System.Text.Json.JsonException) { return false; }
@@ -121,25 +124,25 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
     public IActionResult OnPostRead(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
     {
         database.Execute("UPDATE articles SET is_read=1 WHERE id=?", id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category, sort });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort });
     }
 
     public IActionResult OnPostUnread(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
     {
         database.Execute("UPDATE articles SET is_read=0 WHERE id=?", id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category, sort });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort });
     }
 
     public IActionResult OnPostAnalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
     {
         analyzer.QueueAnalysis(id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category, sort });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort });
     }
 
     public IActionResult OnPostReanalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
     {
         analyzer.QueueReanalysis(id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category, sort });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort });
     }
 
     public IActionResult OnPostBulk(string? operation, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
@@ -173,7 +176,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
             "reanalyze" => $"Queued {changed} analyzed article(s) for reanalysis.",
             _ => "No bulk action was applied."
         };
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, mitre, threatActor, filtersOpen, category, sort = sort == "priority" ? "priority" : "recent" });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort = sort == "priority" ? "priority" : "recent" });
     }
 
     public IActionResult OnPostAdHocAnalyze()

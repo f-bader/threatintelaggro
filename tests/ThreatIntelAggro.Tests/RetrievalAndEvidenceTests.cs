@@ -90,7 +90,7 @@ public sealed class RetrievalAndEvidenceTests
         var schema = (JsonObject)typeof(AnalysisService).GetMethod("ArticleSchema", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
         var sources = JsonNode.Parse("""[{"source_id":"src_article","title":"Fixture","url":"https://example.com/","kind":"original","inspection_status":"fetched","content":"Malicious domain evil.example was observed."}]""")!.AsArray();
         var article = JsonNode.Parse("""
-        {"schema_version":"1.1","language":"en","category":"Existing Research","category_rationale":"fixture",
+        {"schema_version":"1.2","language":"en","category":"Existing Research","category_rationale":"fixture",
          "summary":{"headline":"fixture","overview":"fixture","key_findings":[],"evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"Malicious domain evil.example was observed."}]},
          "iocs":[{"type":"domain","value":"evil.example","normalized_value":"evil.example","role":"malicious","context":"observed","confidence":"high","basis":"source_reported","evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"Malicious domain evil.example was observed."}]}],
          "references":[{"source_id":"src_article","url":"https://example.com/","title":"Fixture","kind":"original","inspection_status":"fetched","relevance":"original"}],

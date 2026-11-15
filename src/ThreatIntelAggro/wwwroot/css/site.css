@@ -329,11 +329,11 @@ h2 { margin: 3px 0 0; color: #dbe2e9; font: 700 16px var(--sans); letter-spacing
 .article-filter-form { display: grid; grid-template-columns: 1fr; min-width: min(520px,60%); }
 .filter-main { display: flex; align-items: center; gap: 7px; }
 .advanced-filters { justify-self: stretch; width: 100%; margin-top: 5px; color: #93a0ae; font: 9px var(--mono); }
-.advanced-filters summary { width: max-content; margin-left: auto; cursor: pointer; color: var(--accent); letter-spacing: .7px; }
+.advanced-filters summary { width: fit-content; max-width: 100%; margin-left: auto; cursor: pointer; color: var(--accent); letter-spacing: .7px; overflow-wrap: anywhere; text-align: right; }
 .advanced-filters summary span { padding-left: 7px; color: #697887; }
 .filter-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(130px,1fr)); gap: 8px; padding: 10px; margin-top: 7px; border: 1px solid #2b3742; background: #0c1218; }
 .filter-grid label,.ioc-filters label { display: grid; gap: 5px; color: #8492a0; font: 9px var(--mono); text-transform: uppercase; letter-spacing: .7px; }
-.filter-grid select,.ioc-filters select,.ioc-filters input { width: 100%; height: 31px; padding: 0 8px; border: 1px solid #303a46; border-radius: 0; background: #0b1016; color: #c2ccd6; font: 10px var(--mono); text-transform: none; letter-spacing: 0; }
+.filter-grid select,.filter-grid input,.ioc-filters select,.ioc-filters input { width: 100%; min-width: 0; height: 31px; padding: 0 8px; border: 1px solid #303a46; border-radius: 0; background: #0b1016; color: #c2ccd6; font: 10px var(--mono); text-transform: none; letter-spacing: 0; }
 .ioc-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 9px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .ioc-filters label { min-width: 130px; flex: 1; }
 .ioc-filters .ioc-search { min-width: 190px; flex: 1.4; }

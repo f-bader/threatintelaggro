@@ -10,7 +10,7 @@ public static class ArticleEvidenceValidator
     {
         var root = JsonNode.Parse(json) ?? throw new InvalidOperationException("Article output is empty.");
         CheckSchema(root, schema, "article");
-        if (root["schema_version"]!.GetValue<string>() != "1.1") Fail("Unsupported article schema version.");
+        if (root["schema_version"]!.GetValue<string>() != "1.2") Fail("Unsupported article schema version.");
         var ledger = sources.ToDictionary(x => x!["source_id"]!.GetValue<string>(), x => x!, StringComparer.Ordinal);
         foreach (var reference in root["references"]!.AsArray())
         {
@@ -54,6 +54,12 @@ public static class ArticleEvidenceValidator
             }
             if (!valueFound) Fail("IOC value is absent from its cited sources.");
             iocIndex++;
+        }
+        var sectorIds = new HashSet<string>(["government","defense","healthcare","financial_services","technology","telecommunications","energy","utilities","manufacturing","transportation","retail","education","media","professional_services","hospitality","agriculture","nonprofit","other"], StringComparer.Ordinal);
+        foreach (var industry in root["industries"]!.AsArray())
+        {
+            var sectorId = industry!["sector_id"];
+            if (sectorId is not null && sectorId.GetValueKind() != System.Text.Json.JsonValueKind.Null && !sectorIds.Contains(sectorId.GetValue<string>())) Fail("Industry sector_id is not in the supported taxonomy.");
         }
         foreach (var field in new[] { "mitre_mappings", "industries", "threat_actors", "vendors", "products", "malware", "campaigns", "vulnerabilities", "targeted_countries" })
             foreach (var mapping in root[field]!.AsArray())

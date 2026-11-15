@@ -41,13 +41,14 @@ public sealed class SettingsTests
         var end = new DateTimeOffset(2026, 11, 15, 6, 0, 0, TimeSpan.Zero);
         fixture.Database.Execute("INSERT INTO articles(feed_title,title,url,summary,published_utc,first_seen_utc,ai_status,analysis_json,evidence_verified) VALUES(?,?,?,?,?,?,?,?,1)",
             "Test feed", "Acme incident", "https://example.test/acme", "Incident overview", end.AddHours(-3).ToString("O"), end.AddHours(-3).ToString("O"), "analyzed",
-            """{"vendors":[{"name":"Acme Corporation"}],"industries":[{"name":"Healthcare"}],"summary":{"overview":"A supported incident overview."},"iocs":[]}""");
+            """{"vendors":[{"name":"Acme Corporation"}],"industries":[{"name":"Healthcare","sector_id":"healthcare"}],"products":[{"name":"Acme Gateway","vendor_name":"Acme Corporation"}],"summary":{"overview":"A supported incident overview."},"iocs":[]}""");
         var settings = fixture.CreateSettingsModel();
         var briefingService = new BriefingService(fixture.Database, new EmptyWriter());
 
         settings.OnGet();
         Assert.Contains("Acme Corporation", settings.AvailableBriefingVendors);
         Assert.Contains("Healthcare", settings.AvailableBriefingIndustries);
+        Assert.Contains("Acme Gateway", settings.AvailableBriefingProducts);
 
         settings.FollowKind = "vendor";
         settings.FollowName = "Acme Corporation";
@@ -60,7 +61,12 @@ public sealed class SettingsTests
         Assert.IsType<Microsoft.AspNetCore.Mvc.RedirectToPageResult>(settings.OnPostAddBriefingFollow());
         var customFollow = fixture.Database.Query("SELECT * FROM briefing_follows WHERE kind='industry'").Single();
         Assert.Equal("1", customFollow["is_custom"]);
-        Assert.Equal(2, briefingService.Followed.Count);
+        settings.FollowKind = "product";
+        settings.FollowName = "Acme Gateway";
+        Assert.IsType<Microsoft.AspNetCore.Mvc.RedirectToPageResult>(settings.OnPostAddBriefingFollow());
+        var productFollow = fixture.Database.Query("SELECT * FROM briefing_follows WHERE kind='product'").Single();
+        Assert.Equal("0", productFollow["is_custom"]);
+        Assert.Equal(3, briefingService.Followed.Count);
 
         var generated = await briefingService.GenerateAsync(end);
         Assert.Equal(1, generated);
@@ -71,7 +77,25 @@ public sealed class SettingsTests
         settings.OnPostToggleBriefingFollow(long.Parse(customFollow["id"]!));
         Assert.Equal("0", fixture.Database.Query("SELECT * FROM briefing_follows WHERE id=?", long.Parse(customFollow["id"]!)).Single()["is_enabled"]);
         settings.OnPostRemoveBriefingFollow(long.Parse(customFollow["id"]!));
-        Assert.Single(briefingService.Followed);
+        Assert.Equal(2, briefingService.Followed.Count);
+    }
+
+    [Fact]
+    public void Briefing_follow_migration_preserves_existing_rows_and_allows_products()
+    {
+        using var fixture = DatabaseFixture.Create();
+        fixture.Database.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES('industry','Healthcare',0,1)");
+        fixture.Database.Execute("BEGIN IMMEDIATE; CREATE TABLE briefing_follows_legacy (id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL CHECK(kind IN ('vendor','industry')),name TEXT NOT NULL,is_enabled INTEGER NOT NULL DEFAULT 1,is_custom INTEGER NOT NULL DEFAULT 0,UNIQUE(kind,name COLLATE NOCASE)); INSERT INTO briefing_follows_legacy SELECT * FROM briefing_follows; DROP TABLE briefing_follows; ALTER TABLE briefing_follows_legacy RENAME TO briefing_follows; COMMIT;");
+
+        fixture.Database.Initialize();
+
+        var preserved = Assert.Single(fixture.Database.Query("SELECT * FROM briefing_follows"));
+        Assert.Equal("industry", preserved["kind"]);
+        Assert.Equal("Healthcare", preserved["name"]);
+        Assert.Equal("0", preserved["is_enabled"]);
+        Assert.Equal("1", preserved["is_custom"]);
+        fixture.Database.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES('product','Acme Gateway',1,0)");
+        Assert.Equal("Acme Gateway", fixture.Database.Query("SELECT name FROM briefing_follows WHERE kind='product'").Single()["name"]);
     }
 
     private sealed class DatabaseFixture : IDisposable
