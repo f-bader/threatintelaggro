@@ -24,6 +24,14 @@ This keeps the existing database and other volume contents. For a bind mount ins
 
 OpenAI is the primary AI provider. Azure OpenAI is an optional provider with explicit capability checks. Public source research and KQL assistance/validation use bounded tools; the MCP endpoint is `https://mcp.xdrinternals.com`.
 
+## Daily threat briefings
+
+Briefings is the default start tab; Inbox remains available as its own tab. In Settings, follow affected vendors and industries from analyzed article metadata or add custom names. Entries can be disabled without removing them. Briefings match analyzed articles in the previous 24-hour UTC window using normalized and conservative fuzzy matching, and preserve each match in the archived snapshot.
+
+The background scheduler defaults to 06:00 UTC, backfills missed daily windows, and waits for in-progress article analyses before closing a window. It does not create a briefing when no followed vendor or industry matches an analyzed article. A briefing includes an AI-written executive summary, links to applicable articles with exact/fuzzy match reasons, relevant unarchived detection drafts, and IOC counts by type and classification without raw values. The system prompt is editable in Settings; clearing it and saving restores the displayed default. Generation uses the configured AI model. Settings also provide manual generation and a schedule enable/disable control.
+
+Each briefing is archived. Markdown and light-design PDF downloads are available. Settings can generate or rotate a full-archive RSS URL at `/briefings/rss/<random-id>`. The random ID is stored as a hash and shown only once; treat the URL as a secret. The RSS endpoint is unauthenticated at the app layer for feed readers, but its random ID is required. When the deployment proxy normally requires sign-in, exempt only `/briefings/rss/*` from that sign-in rule; keep `/`, `/Settings`, `/Inbox`, `/briefings/<id>`, and the other UI routes protected. Verify that missing or invalid RSS IDs return 404.
+
 Detections have JSON and KQL downloads. XDRConverter YAML is generated with a YAML serializer and checked against the [XDRConverter schema](https://github.com/f-bader/XDRConverter) pinned at commit `9c60aa8b653e89bf68ef4c318a92c1b62efe958b`. A supported ATT&CK tactic is required for YAML export; older drafts without one can still be downloaded as KQL or JSON. KQL validation uses the XDR Internals MCP service when available. Review the validation status and source evidence before using a draft; evidence matching does not establish that the detection is correct. Exported rules default to disabled.
 
 ## Backups and restore
@@ -76,4 +84,4 @@ AGGRO_TRUSTED_PROXY_IPS=172.18.0.1
 
 Restart the app container after changing this value. If NGINX runs in Docker on a shared Compose network, set the NGINX container's fixed network address instead.
 
-Verify the deployed front door independently: requests to `/`, `/Settings`, `/Iocs`, `/Detections`, `/internal/*` and `/api/*` without the intended credentials must be denied, while `/health` may remain available for health checks. Confirm authenticated requests work and that the app port cannot be reached directly from an untrusted network. Verify that the proxy removes client-supplied forwarding headers and supplies its own, and test these checks again whenever the proxy or network configuration changes. The app does not implement UI sign-in itself.
+Verify the deployed front door independently: requests to `/`, `/Settings`, `/Inbox`, `/Iocs`, `/Detections`, `/briefings/<id>`, `/internal/*` and `/api/*` without the intended credentials must be denied. The tokenized `/briefings/rss/<random-id>` route is the only UI-related unauthenticated exception; invalid IDs must return 404. `/health` may remain available for health checks. Confirm authenticated requests work and that the app port cannot be reached directly from an untrusted network. Verify that the proxy removes client-supplied forwarding headers and supplies its own, and test these checks again whenever the proxy or network configuration changes. The app does not implement UI sign-in itself.

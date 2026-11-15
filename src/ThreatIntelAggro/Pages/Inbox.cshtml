@@ -1,0 +1,137 @@
+@page "/Inbox"
+@model InboxModel
+@{
+    ViewData["Title"] = "Intel Inbox";
+}
+<div class="page-heading">
+  <div><div class="eyebrow"><span class="live-dot"></span> TELEMETRY / COLLECTION STATUS</div><h1>Article telemetry</h1><p class="subhead">Incoming threat reporting across monitored sources.</p></div>
+  <a class="button button-primary" asp-page="/Feeds">MANAGE SOURCES <span>↗</span></a>
+</div>
+<section class="stat-grid" aria-label="Inbox overview">
+  <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">UNREAD SIGNALS</div><div class="stat-value">@Model.UnreadCount.ToString("N0")<span class="unit-mark">ITEMS</span></div><div class="stat-note"><span class="signal"></span> Awaiting review</div><div class="metric-bar"><i style="width:@(Model.TotalCount == 0 ? 0 : Math.Min(100, Model.UnreadCount * 100 / Math.Max(1, Model.TotalCount)))%"></i></div></div>
+  <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">ACTIVE SOURCES</div><div class="stat-value">@Model.FeedCount.ToString("00")<span class="unit-mark">FEEDS</span></div><div class="stat-note">Next scheduled poll varies by feed</div><div class="metric-bar"><i style="width:@(Math.Min(100, Model.FeedCount))%"></i></div></div>
+  <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">ARRIVED TODAY</div><div class="stat-value">@Model.TodayCount.ToString("00")<span class="unit-mark">ITEMS</span></div><div class="stat-note">First observed in the current day</div><div class="metric-bar"><i style="width:@(Math.Min(100, Model.TodayCount * 12))%"></i></div></div>
+  <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">ARCHIVE INDEX</div><div class="stat-value">@Model.TotalCount.ToString("N0")<span class="unit-mark">ITEMS</span></div><div class="stat-note">Retained in local SQLite</div><div class="metric-bar"><i style="width:@(Math.Min(100, Model.TotalCount * 4))%"></i></div></div>
+</section>
+@if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
+<section class="panel add-feed-panel adhoc-panel"><div class="panel-head"><div><div class="eyebrow">ONE-OFF COLLECTION</div><h2>Ad hoc analysis</h2></div><span class="quiet-label">PUBLIC ARTICLE URL</span></div>
+<form method="post" asp-page-handler="AdHocAnalyze" class="adhoc-form"><label for="AdHocUrl">Website URL<input asp-for="AdHocUrl" id="AdHocUrl" type="url" placeholder="https://example.com/security-report" required maxlength="2048"/><span asp-validation-for="AdHocUrl" class="validation"></span></label><button class="button button-primary" type="submit">AD HOC ANALYZE <span>↗</span></button></form><p class="form-footnote">Fetches this page once, adds it to your inbox, and queues the usual research and detection analysis. It does not create a recurring feed.</p></section>
+<section class="panel article-stream-panel">
+ <div class="panel-head"><div class="panel-title"><span class="section-index" aria-hidden="true"></span><div><div class="eyebrow">COLLECTED INTELLIGENCE</div><h2>Article stream <span class="count-chip">@Model.Articles.Count</span></h2></div></div>
+  <form method="get" class="toolbar article-filter-form" id="article-filter-form"><input type="hidden" name="filtersOpen" value="@(Model.FiltersOpen ? "true" : "false")"/><div class="filter-main"><label class="search-box"><span>⌕</span><input name="search" value="@Model.Search" placeholder="Search reports" aria-label="Search reports"/></label>
+  <select name="state" aria-label="Read state"><option value="unread" selected="@(Model.State == "unread")">Unread</option><option value="all" selected="@(Model.State == "all")">All articles</option><option value="read" selected="@(Model.State == "read")">Read</option></select><button class="button button-quiet" type="submit">Search</button></div>
+  <details class="advanced-filters" @((Model.FiltersOpen) ? "open" : null)><summary>ADVANCED FILTERS <span>@(Model.ActiveFilterCount > 0 ? $"{Model.ActiveFilterCount} active · " : "")industry · vendor · MITRE · actor · category</span></summary><div class="filter-grid">
+    <label>Industry<select name="industry"><option value="">Any industry</option>@foreach (var value in Model.Industries) { <option value="@value" selected="@(Model.Industry == value)">@value</option> }</select></label>
+    <label>Affected vendor<select name="vendor"><option value="">Any vendor</option>@foreach (var value in Model.Vendors) { <option value="@value" selected="@(Model.Vendor == value)">@value</option> }</select></label>
+    <label>MITRE mapping<select name="mitre"><option value="">Any mapping</option>@foreach (var value in Model.MitreMappings) { <option value="@value" selected="@(Model.Mitre == value)">@value</option> }</select></label>
+    <label>Threat actor<select name="threatActor"><option value="">Any actor</option>@foreach (var value in Model.ThreatActors) { <option value="@value" selected="@(Model.ThreatActor == value)">@value</option> }</select></label>
+    <label>Category<select name="category"><option value="">Any category</option>@foreach (var value in Model.CategoryOptions) { <option value="@value" selected="@(Model.Category == value)">@value</option> }</select></label>
+    <label>Sort by<select name="sort"><option value="recent" selected="@(Model.Sort == "recent")">Newest first</option><option value="priority" selected="@(Model.Sort == "priority")">Category priority</option></select></label>
+  </div></details></form>
+ </div>
+ <div class="article-list">
+ @if (Model.Articles.Count == 0)
+ {
+   <div class="empty-state"><div class="empty-icon">⌁</div><h3>No articles here yet</h3><p>Unit 42 is ready to poll. You can refresh it now or add another source.</p><a class="button button-secondary" asp-page="/Feeds">Open feed manager</a></div>
+ }
+ @foreach (var article in Model.Articles)
+ {
+  <article class="article-row @(article["is_read"] == "0" ? "unread" : "")" data-article-id="@article["id"]">
+    <div class="article-marker"></div><div class="article-content"><div class="article-meta"><span class="source-tag">@article["feed_title"]</span><span>·</span><span>@(DateTimeOffset.TryParse(article["published_utc"] ?? article["first_seen_utc"], out var date) ? date.ToLocalTime().ToString("dd MMM yyyy · HH:mm") : "Date unknown")</span><span class="pipeline-tag ai-@article["ai_status"]" title="@(article["ai_status"] == "failed" ? article["ai_error"] : null)" aria-label="@((article["ai_status"] == "failed" && !string.IsNullOrWhiteSpace(article["ai_error"])) ? $"Analysis failed: {article["ai_error"]}" : null)"><i></i> @((article["ai_status"] ?? "pending") switch { "analyzed" => "ANALYSIS COMPLETE", "analyzing" => "ANALYZING", "failed" => "ANALYSIS FAILED", _ => "AWAITING ANALYSIS" })</span>@if (article["ai_status"] == "analyzed") { <span class="category-pill category-@Model.CategoryClass(article["category"])" title="@Model.CategoryRationale(article["analysis_json"])">@ArticleCategories.Normalize(article["category"])</span> }</div>
+      <h3><a href="@article["url"]" target="_blank" rel="noopener noreferrer">@article["title"] <span class="external">↗</span></a></h3><p class="article-summary">@System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(article["summary"] ?? "", "<[^>]+>", " "))</p>
+      @if (article["ai_status"] == "failed") { <p class="analysis-error" title="@article["ai_error"]">Analysis did not finish. Retry when ready.</p> }
+      <div class="article-actions"><form method="post" asp-page-handler="@(article["is_read"] == "0" ? "Read" : "Unread")"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><button class="mark-action" type="submit"><span aria-hidden="true">@(article["is_read"] == "0" ? "✓" : "↺")</span>@(article["is_read"] == "0" ? "MARK AS READ" : "MARK UNREAD")</button></form>
+      @if (Model.DetectionCount(article["id"]) > 0) { <a class="mark-action" asp-page="/Detections" asp-route-articleId="@article["id"]">VIEW DETECTIONS</a> }
+      @if (article["ai_status"] == "analyzed") { <form method="post" asp-page-handler="Category" class="category-control"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="categoryFilter" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><label class="sr-only" for="category-@article["id"]">Article category</label><select id="category-@article["id"]" name="selectedCategory" aria-label="Change article category">@foreach (var categoryOption in Model.CategoryOptions) { <option value="@categoryOption" selected="@(article["category"] == categoryOption)">@categoryOption</option> }</select><button class="mark-action" type="submit">SET CATEGORY</button></form> }
+      @if (article["ai_status"] != "analyzed") { <form method="post" asp-page-handler="Analyze" data-analysis-form style="@(article["ai_status"] == "analyzing" ? "display:none" : "")"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><button class="mark-action" type="submit">@(article["ai_status"] == "failed" ? "RETRY ANALYSIS" : "ANALYZE NOW")</button></form> }
+      @if (!string.IsNullOrWhiteSpace(article["analysis_json"])) { <details class="analysis-details"><summary>OPEN STRUCTURED INTELLIGENCE</summary>@{
+        using var analysisDoc = System.Text.Json.JsonDocument.Parse(article["analysis_json"]!);
+        var root = analysisDoc.RootElement;
+        var citedSourceIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reference in root.GetProperty("references").EnumerateArray()) if (reference.TryGetProperty("source_id", out var refId)) citedSourceIds.Add(refId.GetString() ?? "");
+        foreach (var ioc in root.GetProperty("iocs").EnumerateArray()) if (ioc.TryGetProperty("evidence", out var evidence) && evidence.ValueKind == System.Text.Json.JsonValueKind.Array) foreach (var item in evidence.EnumerateArray()) if (item.TryGetProperty("source_id", out var evidenceId)) citedSourceIds.Add(evidenceId.GetString() ?? "");
+        var relatedSources = new List<(string Id, string Title, string Url, string Kind, string Status, bool Cited)>();
+        using (var ledgerDoc = System.Text.Json.JsonDocument.Parse(article["source_ledger_json"] ?? "[]"))
+          foreach (var source in ledgerDoc.RootElement.EnumerateArray()) {
+            var sourceId = source.TryGetProperty("source_id", out var sid) ? sid.GetString() ?? "" : "";
+            if (sourceId == "src_article") continue;
+            relatedSources.Add((sourceId, source.TryGetProperty("title", out var st) ? st.GetString() ?? sourceId : sourceId, source.TryGetProperty("url", out var su) ? su.GetString() ?? "" : "", source.TryGetProperty("kind", out var sk) ? sk.GetString() ?? "related report" : "related report", source.TryGetProperty("inspection_status", out var ss) ? ss.GetString() ?? "unknown" : "unknown", citedSourceIds.Contains(sourceId)));
+          }
+        if (relatedSources.Count == 0) foreach (var reference in root.GetProperty("references").EnumerateArray()) {
+          var sourceId = reference.TryGetProperty("source_id", out var sid) ? sid.GetString() ?? "" : "";
+          if (sourceId == "src_article") continue;
+          relatedSources.Add((sourceId, reference.TryGetProperty("title", out var st) ? st.GetString() ?? sourceId : sourceId, reference.TryGetProperty("url", out var su) ? su.GetString() ?? "" : "", reference.TryGetProperty("kind", out var sk) ? sk.GetString() ?? "related report" : "related report", reference.TryGetProperty("inspection_status", out var ss) ? ss.GetString() ?? "unknown" : "unknown", citedSourceIds.Contains(sourceId)));
+        }
+        var relatedReadCount = relatedSources.Count(x => x.Status.Equals("fetched", StringComparison.OrdinalIgnoreCase));
+        var relatedCitedCount = relatedSources.Count(x => x.Cited);
+      }<h4>@root.GetProperty("summary").GetProperty("headline").GetString()</h4><p>@root.GetProperty("summary").GetProperty("overview").GetString()</p>
+      @{ var summary = root.GetProperty("summary"); }
+      @if (summary.TryGetProperty("evidence", out var summaryEvidence) && summaryEvidence.ValueKind == System.Text.Json.JsonValueKind.Array && summaryEvidence.GetArrayLength() > 0) { <details class="query-details evidence-details"><summary>SUMMARY EVIDENCE</summary>@foreach (var citation in summaryEvidence.EnumerateArray()) { <div class="evidence-item"><blockquote>@citation.GetProperty("excerpt").GetString()</blockquote><small>Source @citation.GetProperty("source_id").GetString() · @citation.GetProperty("locator").GetString()</small></div> }</details> }
+      @if (summary.TryGetProperty("key_findings", out var findings) && findings.ValueKind == System.Text.Json.JsonValueKind.Array && findings.GetArrayLength() > 0) { <details class="query-details evidence-details"><summary>KEY FINDINGS</summary>@foreach (var finding in findings.EnumerateArray()) { if (finding.ValueKind == System.Text.Json.JsonValueKind.String) { <p>@finding.GetString()</p> } else if (finding.ValueKind == System.Text.Json.JsonValueKind.Object) { <div class="evidence-item"><p><strong>@finding.GetProperty("text").GetString()</strong> · @finding.GetProperty("basis").GetString() · @finding.GetProperty("confidence").GetString() confidence</p>@if (finding.TryGetProperty("evidence", out var evidence) && evidence.ValueKind == System.Text.Json.JsonValueKind.Array) { @foreach (var citation in evidence.EnumerateArray()) { <blockquote>@citation.GetProperty("excerpt").GetString()</blockquote><small>Source @citation.GetProperty("source_id").GetString() · @citation.GetProperty("locator").GetString()</small> } }</div> } }</details> }
+      <section class="source-coverage" aria-label="Related source coverage"><div class="source-coverage-head"><div><span class="eyebrow">RESEARCH COVERAGE</span><strong>@relatedReadCount related source@(relatedReadCount == 1 ? "" : "s") read</strong></div><span class="source-cited-count">@relatedCitedCount cited in findings</span></div>
+        @if (relatedSources.Count > 0) { <ul class="source-ledger">@foreach (var source in relatedSources) { <li class="@(source.Cited ? "source-cited" : "")"><span class="source-ledger-status @(source.Cited ? "is-cited" : source.Status == "fetched" ? "is-read" : "is-unread")">@(source.Cited ? "CITED" : source.Status == "fetched" ? "READ" : source.Status.ToUpperInvariant())</span><div><a href="@source.Url" target="_blank" rel="noopener noreferrer">@source.Title <span class="external">↗</span></a><small>@source.Kind · @source.Id</small></div></li> }</ul> }
+      </section><div class="analysis-grid">
+        @foreach (var group in new[] { ("IOCS","iocs"),("MITRE","mitre_mappings"),("TARGETED INDUSTRIES","industries"),("THREAT ACTORS","threat_actors"),("AFFECTED VENDORS","vendors") }) { <div><strong>@group.Item1</strong><ul>
+          @if (group.Item2 == "iocs") { @foreach (var item in Model.VisibleIocs(root, article["id"]).Take(12)) { <li>@item</li> } }
+          else if (group.Item2 == "industries") { @foreach (var item in IocIndex.Values(root, "industries").Take(12)) { <li>@item</li> } }
+          else { @foreach (var item in root.GetProperty(group.Item2).EnumerateArray().Take(12)) { <li>@(item.TryGetProperty("name", out var name) ? name.GetString() : item.TryGetProperty("value", out var value) ? value.GetString() : item.TryGetProperty("title", out var title) ? title.GetString() : "")</li> } }
+        </ul></div> }
+      </div><p class="quiet-label">Detection assessment: @root.GetProperty("detection_assessment").GetProperty("potential").GetString() — @root.GetProperty("detection_assessment").GetProperty("reason").GetString()</p></details> }
+      </div>
+    </div><div class="article-side"><span class="source-initial">@((article["feed_title"] ?? "?").FirstOrDefault())</span></div>
+  </article>
+ }
+ </div>
+ <div class="list-foot"><span>Showing @Model.Articles.Count most recent matching articles</span><span>⟳ &nbsp;Feed checks run in the background</span></div>
+</section>
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
+(() => {
+  const form = document.querySelector('#article-filter-form');
+  if (!form) return;
+  const details = form.querySelector('.advanced-filters');
+  const openState = form.querySelector('input[name="filtersOpen"]');
+  details?.addEventListener('toggle', () => { if (openState) openState.value = details.open ? 'true' : 'false'; });
+  form.querySelectorAll('select').forEach(select => select.addEventListener('change', () => {
+    if (openState) openState.value = details?.open ? 'true' : 'false';
+    form.requestSubmit();
+  }));
+  details?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      details.open = false;
+      if (openState) openState.value = 'false';
+    }
+  });
+  const search = form.querySelector('input[name="search"]');
+  let timer;
+  search?.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => form.requestSubmit(), 250);
+  });
+})();
+</script>
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
+(() => {
+  const states = { pending: 'AWAITING ANALYSIS', analyzing: 'ANALYZING', analyzed: 'ANALYSIS COMPLETE', failed: 'ANALYSIS FAILED' };
+  async function updateAnalysisStates() {
+    try {
+      const response = await fetch('/internal/articles/status', { headers: { 'Accept': 'application/json' } });
+      if (!response.ok) return;
+      const articles = await response.json();
+      for (const article of articles) {
+        const row = document.querySelector(`[data-article-id="${article.id}"]`);
+        const badge = row?.querySelector('.pipeline-tag');
+        if (!row || !badge) continue;
+        badge.className = `pipeline-tag ai-${article.status}`;
+        badge.innerHTML = `<i></i> ${states[article.status] || article.status.toUpperCase()}`;
+        const error = article.error || 'No additional error details were recorded.';
+        badge.title = article.status === 'failed' ? error : '';
+        badge.setAttribute('aria-label', article.status === 'failed' ? `Analysis failed: ${error}` : states[article.status] || article.status.toUpperCase());
+        const form = row.querySelector('[data-analysis-form]');
+        if (article.status === 'analyzed') form?.remove();
+        else if (form) { form.style.display = article.status === 'analyzing' ? 'none' : ''; form.querySelector('button').textContent = article.status === 'failed' ? 'RETRY ANALYSIS' : 'ANALYZE NOW'; }
+      }
+    } catch { }
+  }
+  if (document.querySelector('.ai-analyzing,.ai-pending')) setInterval(updateAnalysisStates, 5000);
+})();
+</script>

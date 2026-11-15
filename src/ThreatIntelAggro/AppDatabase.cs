@@ -10,9 +10,9 @@ public sealed class AppDatabase : IDisposable
     private long _changeVersion;
     public long ChangeVersion => Interlocked.Read(ref _changeVersion);
 
-    public AppDatabase(IWebHostEnvironment environment)
+    public AppDatabase(IWebHostEnvironment environment, string? dataDirectory = null)
     {
-        var configured = Environment.GetEnvironmentVariable("AGGRO_DATA_DIR");
+        var configured = dataDirectory ?? Environment.GetEnvironmentVariable("AGGRO_DATA_DIR");
         var directory = configured ?? Path.Combine(environment.ContentRootPath, "App_Data");
         Directory.CreateDirectory(directory);
         _path = Path.Combine(directory, "aggro.db");
@@ -62,6 +62,9 @@ public sealed class AppDatabase : IDisposable
                     UNIQUE(article_id,local_key)
                 );
                 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS briefing_follows (id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL CHECK(kind IN ('vendor','industry')),name TEXT NOT NULL,is_enabled INTEGER NOT NULL DEFAULT 1,is_custom INTEGER NOT NULL DEFAULT 0,UNIQUE(kind,name COLLATE NOCASE));
+                CREATE TABLE IF NOT EXISTS briefings (id INTEGER PRIMARY KEY AUTOINCREMENT,window_start_utc TEXT NOT NULL,window_end_utc TEXT NOT NULL,created_utc TEXT NOT NULL,title TEXT NOT NULL,executive_summary TEXT NOT NULL,detection_summary TEXT NOT NULL,ioc_summary TEXT NOT NULL,article_ids_json TEXT NOT NULL,article_snapshot_json TEXT NOT NULL,markdown TEXT NOT NULL,UNIQUE(window_start_utc,window_end_utc));
+                CREATE INDEX IF NOT EXISTS ix_briefings_created ON briefings(created_utc DESC);
                 CREATE TABLE IF NOT EXISTS article_ai_config (article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,config_json TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ioc_exclusions (id INTEGER PRIMARY KEY AUTOINCREMENT,value TEXT NOT NULL UNIQUE,created_utc TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ioc_dismissals (article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,ioc_type TEXT NOT NULL,ioc_value TEXT NOT NULL,dismissed_utc TEXT NOT NULL,PRIMARY KEY(article_id,ioc_type,ioc_value));

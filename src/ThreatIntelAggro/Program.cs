@@ -21,8 +21,12 @@ var dataDirectory = Environment.GetEnvironmentVariable("AGGRO_DATA_DIR") ?? Path
 Directory.CreateDirectory(Path.Combine(dataDirectory, "keys"));
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDirectory, "keys")));
 builder.Services.AddSingleton<AppDatabase>();
-builder.Services.AddSingleton<AiModelSettingsService>();
 builder.Services.AddSingleton<IocCountCache>();
+builder.Services.AddSingleton<AiModelSettingsService>();
+builder.Services.AddSingleton<IBriefingWriter, OpenAiBriefingWriter>();
+builder.Services.AddScoped<BriefingService>();
+builder.Services.AddHostedService<BriefingScheduler>();
+builder.Services.AddHttpClient("BriefingAI", client => client.Timeout = TimeSpan.FromMinutes(2));
 builder.Services.AddSingleton<BackupManager>();
 builder.Services.AddHostedService<BackupWorker>();
 builder.Services.AddSingleton<SafePublicFetcher>();
@@ -34,9 +38,12 @@ builder.Services.AddHttpClient<AnalysisService>(client =>
 }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = TimeSpan.FromMinutes(10) });
 builder.Services.AddHttpClient(nameof(M365EndpointUpdater), client => client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient("OpenAIModels", client => client.Timeout = TimeSpan.FromSeconds(20));
-builder.Services.AddHostedService<FeedScheduler>();
-builder.Services.AddHostedService<AnalysisQueue>();
-builder.Services.AddHostedService<M365EndpointUpdater>();
+if (!builder.Configuration.GetValue<bool>("ThreatIntelAggro:DisableExternalWorkers"))
+{
+    builder.Services.AddHostedService<FeedScheduler>();
+    builder.Services.AddHostedService<AnalysisQueue>();
+    builder.Services.AddHostedService<M365EndpointUpdater>();
+}
 
 var app = builder.Build();
 var db = app.Services.GetRequiredService<AppDatabase>();
@@ -88,6 +95,15 @@ app.MapGet("/health", (AppDatabase database) =>
 {
     try { database.ScalarInt("SELECT COUNT(*) FROM feeds"); return Results.Ok(new { status = "healthy" }); }
     catch { return Results.StatusCode(503); }
+});
+app.MapGet("/briefings/rss/{token}", (string token, HttpRequest request, AppDatabase database) =>
+{
+    var expected = IocExclusionSettings.Get(database, "briefing_rss_hash") ?? "";
+    var supplied = BriefingService.HashFeedId(token);
+    if (expected.Length != supplied.Length || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(expected), System.Text.Encoding.ASCII.GetBytes(supplied))) return Results.NotFound();
+    var baseUrl = $"{request.Scheme}://{request.Host}";
+    var items = database.Query("SELECT id,title,created_utc,executive_summary,detection_summary,ioc_summary,article_snapshot_json FROM briefings ORDER BY window_end_utc DESC");
+    return Results.Text(BriefingService.BuildRss(baseUrl, items), "application/rss+xml; charset=utf-8");
 });
 app.MapGet("/internal/articles/status", (AppDatabase database) => Results.Json(database.Query("SELECT id,ai_status AS status,ai_error AS error FROM articles ORDER BY id DESC LIMIT 200").Select(x => new { id = x["id"], status = x["status"], error = x["error"] })));
 app.MapGet("/api/iocs", (HttpRequest request, AppDatabase database) =>

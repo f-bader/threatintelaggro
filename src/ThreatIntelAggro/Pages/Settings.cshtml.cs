@@ -3,8 +3,21 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace ThreatIntelAggro.Pages;
 
-public sealed class SettingsModel(AppDatabase database, AiModelSettingsService aiModelSettings, IConfiguration configuration, IHttpClientFactory httpClientFactory) : PageModel
+public sealed class SettingsModel(AppDatabase database, AiModelSettingsService aiModelSettings, IConfiguration configuration, IHttpClientFactory httpClientFactory, BriefingService briefings) : PageModel
 {
+    public IReadOnlyList<Dictionary<string, string?>> BriefingFollows { get; private set; } = [];
+    public IReadOnlyList<string> AvailableBriefingVendors { get; private set; } = [];
+    public IReadOnlyList<string> AvailableBriefingIndustries { get; private set; } = [];
+    public bool BriefingEnabled { get; private set; } = true;
+    public string BriefingTimeUtc { get; private set; } = "06:00";
+    public string BriefingPrompt { get; private set; } = BriefingService.DefaultPrompt;
+    public bool BriefingFeedActive { get; private set; }
+    [TempData] public string? GeneratedBriefingFeedUrl { get; set; }
+    [BindProperty] public string FollowKind { get; set; } = "vendor";
+    [BindProperty] public string FollowName { get; set; } = "";
+    [BindProperty] public bool BriefingEnabledInput { get; set; } = true;
+    [BindProperty] public string BriefingTimeInput { get; set; } = "06:00";
+    [BindProperty] public string? BriefingPromptInput { get; set; } = BriefingService.DefaultPrompt;
     public IReadOnlyList<Dictionary<string, string?>> IocExclusions { get; private set; } = [];
     public bool ExcludeM365 { get; private set; }
     public string M365RefreshedUtc { get; private set; } = "";
@@ -42,7 +55,7 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
     public void OnGet()
     {
         Load();
-        if (!string.IsNullOrWhiteSpace(GeneratedApiKey)) Response.Headers.CacheControl = "no-store";
+        if (!string.IsNullOrWhiteSpace(GeneratedApiKey) || !string.IsNullOrWhiteSpace(GeneratedBriefingFeedUrl)) Response.Headers.CacheControl = "no-store";
     }
 
     public IActionResult OnPostSaveAiSettings()
@@ -114,6 +127,47 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
         return RedirectToPage();
     }
 
+    public IActionResult OnPostSaveBriefing()
+    {
+        var prompt = (BriefingPromptInput ?? "").Trim();
+        if (!TimeOnly.TryParse(BriefingTimeInput, out var time) || prompt.Length > 10000 || (prompt.Length > 0 && prompt.Length < 20))
+        {
+            Notice = "Enter a valid UTC generation time and a prompt of at most 10,000 characters (or leave it blank to restore the default)."; Load(); return Page();
+        }
+        IocExclusionSettings.Set(database, "briefing_enabled", BriefingEnabledInput ? "true" : "false");
+        IocExclusionSettings.Set(database, "briefing_time_utc", time.ToString("HH:mm"));
+        if (prompt.Length == 0) database.Execute("DELETE FROM app_settings WHERE key='briefing_prompt'");
+        else IocExclusionSettings.Set(database, "briefing_prompt", prompt);
+        Notice = prompt.Length == 0 ? "Threat briefing settings saved. The default system prompt has been restored." : "Threat briefing settings saved."; return RedirectToPage();
+    }
+
+    public IActionResult OnPostAddBriefingFollow()
+    {
+        FollowName = (FollowName ?? "").Trim();
+        if (FollowKind is not ("vendor" or "industry") || FollowName.Length is < 2 or > 100)
+        { Notice = "Choose a vendor or industry and enter a name between 2 and 100 characters."; Load(); return Page(); }
+        var kind = FollowKind;
+        var existing = briefings.Available(kind);
+        database.Execute("INSERT OR IGNORE INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES(?,?,1,?)", kind, FollowName, existing.Contains(FollowName, StringComparer.OrdinalIgnoreCase) ? 0 : 1);
+        Notice = "Followed item added."; return RedirectToPage();
+    }
+
+    public IActionResult OnPostToggleBriefingFollow(long id)
+    {
+        database.Execute("UPDATE briefing_follows SET is_enabled=CASE is_enabled WHEN 1 THEN 0 ELSE 1 END WHERE id=?", id); Notice = "Followed item status updated."; return RedirectToPage();
+    }
+    public IActionResult OnPostRemoveBriefingFollow(long id)
+    {
+        database.Execute("DELETE FROM briefing_follows WHERE id=?", id); Notice = "Followed item removed."; return RedirectToPage();
+    }
+    public IActionResult OnPostRotateBriefingFeed()
+    {
+        var token = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        IocExclusionSettings.Set(database, "briefing_rss_hash", BriefingService.HashFeedId(token));
+        GeneratedBriefingFeedUrl = $"{Request.Scheme}://{Request.Host}/briefings/rss/{token}";
+        Response.Headers.CacheControl = "no-store"; Notice = "Briefing RSS access ID generated. Copy the feed URL now; it cannot be displayed again."; return RedirectToPage();
+    }
+
     public IActionResult OnPostToggleM365(bool enabled)
     {
         IocExclusionSettings.Set(database, "exclude_m365_endpoints", enabled ? "true" : "false");
@@ -169,6 +223,15 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
 
     private void Load(bool preserveAiInput = false)
     {
+        BriefingFollows = database.Query("SELECT * FROM briefing_follows ORDER BY kind,name COLLATE NOCASE");
+        AvailableBriefingVendors = briefings.Available("vendor");
+        AvailableBriefingIndustries = briefings.Available("industry");
+        BriefingEnabled = IocExclusionSettings.Get(database, "briefing_enabled") != "false";
+        var savedTime = IocExclusionSettings.Get(database, "briefing_time_utc");
+        BriefingTimeUtc = TimeOnly.TryParse(savedTime, out var configuredTime) ? configuredTime.ToString("HH:mm") : "06:00";
+        BriefingPrompt = BriefingService.ResolvePrompt(IocExclusionSettings.Get(database, "briefing_prompt"));
+        BriefingEnabledInput = BriefingEnabled; BriefingTimeInput = BriefingTimeUtc; if (!preserveAiInput) BriefingPromptInput = BriefingPrompt;
+        BriefingFeedActive = !string.IsNullOrWhiteSpace(IocExclusionSettings.Get(database, "briefing_rss_hash"));
         ApiKeyConfigured = !string.IsNullOrWhiteSpace(configuration["OpenAI:ApiKey"] ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
         CurrentAiSettings = aiModelSettings.Read();
         if (!preserveAiInput)
