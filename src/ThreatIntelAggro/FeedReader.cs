@@ -48,7 +48,7 @@ public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, 
         {
             var message = Limit(exception.Message, 500);
             database.Execute("UPDATE feeds SET last_checked_utc=?,last_error=? WHERE id=?", DateTimeOffset.UtcNow.ToString("O"), message, feedId);
-            log.LogWarning("Feed {FeedId} refresh failed: {Error}", feedId, message);
+            log.LogWarning(exception, "Feed {FeedId} refresh failed: {Error}", feedId, message);
             throw;
         }
     }

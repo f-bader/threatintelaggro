@@ -38,7 +38,32 @@ public sealed class RetrievalAndEvidenceTests
     {
         using var fetcher = new SafePublicFetcher();
         var error = await Assert.ThrowsAnyAsync<Exception>(() => fetcher.GetAsync("http://localhost/", 100, TimeSpan.FromSeconds(3), CancellationToken.None));
-        Assert.Contains("non-public", error.ToString());
+        Assert.Contains("DNS safety check blocked", error.ToString());
+        Assert.Contains("Rejected addresses", error.ToString());
+    }
+
+    [Fact]
+    public async Task HttpFailuresIncludeResponseDiagnosticsWithoutQuerySecrets()
+    {
+        using var fetcher = new SafePublicFetcher(new Handler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("automated requests are forbidden")
+            };
+            response.Headers.TryAddWithoutValidation("x-request-id", "request-123");
+            response.Headers.Server.ParseAdd("fixture-server");
+            return response;
+        }));
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() => fetcher.GetAsync("https://example.com/feed/?token=private", 100, TimeSpan.FromSeconds(1), CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.Forbidden, error.StatusCode);
+        Assert.Contains("HTTP 403 Forbidden", error.Message);
+        Assert.Contains("https://example.com/feed/", error.Message);
+        Assert.Contains("request-123", error.Message);
+        Assert.Contains("automated requests are forbidden", error.Message);
+        Assert.DoesNotContain("token=private", error.Message);
     }
 
     [Fact]

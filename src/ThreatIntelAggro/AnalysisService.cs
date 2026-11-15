@@ -170,9 +170,10 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
-                AnalysisDiagnostics.RecordArticle(db, id, currentStage, ex.Message, rawOutput);
-                db.Execute("UPDATE articles SET ai_status='failed',ai_error=? WHERE id=?", Clean(ex.Message, 700, "Analysis failed"), id);
-                log.LogWarning("Analysis failed for article {ArticleId}: {Error}", id, ex.Message);
+                var diagnostic = DescribeFailure(ex, currentStage);
+                AnalysisDiagnostics.RecordArticle(db, id, currentStage, diagnostic, rawOutput);
+                db.Execute("UPDATE articles SET ai_status='failed',ai_error=? WHERE id=?", Clean(diagnostic, 1200, "Analysis failed"), id);
+                log.LogWarning(ex, "Analysis failed for article {ArticleId} during stage {Stage}: {Error}", id, currentStage, diagnostic);
                 return false;
             }
         }
@@ -285,7 +286,17 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
         if (json is not null) request.Content = new StringContent(json, Encoding.UTF8, "application/json");
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         var content = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode) throw new HttpRequestException($"OpenAI API returned {(int)response.StatusCode}: {Limit(content, 500)}", null, response.StatusCode);
+        if (!response.IsSuccessStatusCode)
+        {
+            var contentType = response.Content.Headers.ContentType?.ToString() ?? "unknown";
+            var requestId = response.Headers.TryGetValues("x-request-id", out var ids) ? Limit(string.Join(",", ids), 160) : "";
+            var safeEndpoint = new UriBuilder(url) { Query = "", Fragment = "" }.Uri.AbsoluteUri;
+            var body = CleanDiagnosticSnippet(content, 1200);
+            var details = $"OpenAI API {method.Method} {safeEndpoint} returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}. Content-Type: {contentType}.";
+            if (!string.IsNullOrWhiteSpace(requestId)) details += $" Request ID: {requestId}.";
+            if (!string.IsNullOrWhiteSpace(body)) details += $" Response body: {body}";
+            throw new HttpRequestException(details, null, response.StatusCode);
+        }
         return content;
     }
 
@@ -375,6 +386,26 @@ public sealed class AnalysisService(HttpClient http, SafePublicFetcher fetcher, 
     private static JsonObject Arr(JsonObject item) => new() { ["type"]="array",["items"]=item };
     private static string Clean(string? value, int max, string fallback) { var s = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim(); return s.Length <= max ? s : s[..max]; }
     private static string Limit(string s, int max) => s.Length <= max ? s : s[..max];
+
+    private static string DescribeFailure(Exception exception, string stage)
+    {
+        var parts = new List<string>();
+        for (var current = exception; current is not null; current = current.InnerException!)
+        {
+            var type = current.GetType().Name;
+            var status = current is HttpRequestException { StatusCode: { } code } ? $" HTTP {(int)code} {code}." : "";
+            var message = CleanDiagnosticSnippet(current.Message, 1200);
+            parts.Add($"{type}{status} {message}");
+        }
+        return $"Stage '{stage}' failed: {string.Join(" Inner exception: ", parts)}";
+    }
+
+    private static string CleanDiagnosticSnippet(string value, int max)
+    {
+        var clean = string.Concat(value.Select(c => char.IsControl(c) && c is not '\t' ? ' ' : c));
+        clean = string.Join(' ', clean.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return Limit(clean, max);
+    }
     private sealed class ResearchReference { public string Id { get; set; }=""; public string Url { get; init; }=""; public string Title { get; init; }=""; public string Kind { get; init; }="related_report"; public string Status { get; set; }="discovered_only"; public string Content { get; set; }=""; public string Note { get; set; }=""; }
 }
 
