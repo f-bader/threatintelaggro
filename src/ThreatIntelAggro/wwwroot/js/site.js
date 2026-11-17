@@ -4,6 +4,10 @@
 // Shared bulk selection behavior for the Inbox and IOC review lists.
 (() => {
   function initializeBulkSelection(form) {
+    form.__bulkSelectionController?.abort();
+    const controller = new AbortController();
+    form.__bulkSelectionController = controller;
+    const listenerOptions = { signal: controller.signal };
     const selectVisible = form.querySelector('[data-select-visible]');
     const count = form.querySelector('[data-selection-count]');
     const items = [...document.querySelectorAll(`[form="${form.id}"][data-selection-item]`)];
@@ -32,13 +36,16 @@
     selectVisible?.addEventListener('change', () => {
       items.forEach(item => { item.checked = selectVisible.checked; });
       refresh();
-    });
-    items.forEach(item => item.addEventListener('change', refresh));
-    role?.addEventListener('change', refresh);
+    }, listenerOptions);
+    items.forEach(item => item.addEventListener('change', refresh, listenerOptions));
+    role?.addEventListener('change', refresh, listenerOptions);
     refresh();
   }
 
   document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('[data-bulk-selection]').forEach(initializeBulkSelection);
+  });
+  document.addEventListener('inbox-results-updated', () => {
+    document.querySelectorAll('#bulk-articles-form[data-bulk-selection]').forEach(initializeBulkSelection);
   });
 })();

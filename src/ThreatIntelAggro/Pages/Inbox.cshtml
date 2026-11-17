@@ -19,23 +19,23 @@
 <section class="panel article-stream-panel">
  <div class="panel-head"><div class="panel-title"><span class="section-index" aria-hidden="true"></span><div><div class="eyebrow">COLLECTED INTELLIGENCE</div><h2>Article stream <span class="count-chip">@Model.Articles.Count</span></h2></div></div>
   <form method="get" class="toolbar article-filter-form" id="article-filter-form"><input type="hidden" name="filtersOpen" value="@(Model.FiltersOpen ? "true" : "false")"/><div class="filter-main"><label class="search-box"><span>⌕</span><input name="search" value="@Model.Search" placeholder="Search reports" aria-label="Search reports"/></label>
-  <select name="state" aria-label="Read state"><option value="unread" selected="@(Model.State == "unread")">Unread</option><option value="all" selected="@(Model.State == "all")">All articles</option><option value="read" selected="@(Model.State == "read")">Read</option></select><button class="button button-quiet" type="submit">Search</button></div>
-  <details class="advanced-filters" @((Model.FiltersOpen) ? "open" : null)><summary>ADVANCED FILTERS <span>@(Model.ActiveFilterCount > 0 ? $"{Model.ActiveFilterCount} active · " : "")industry · vendor · product · MITRE · actor · category</span></summary><div class="filter-grid">
+  <select name="state" aria-label="Read state"><option value="unread" selected="@(Model.State == "unread")">Unread</option><option value="all" selected="@(Model.State == "all")">All articles</option><option value="read" selected="@(Model.State == "read")">Read</option></select><label class="followed-only-toggle"><input type="checkbox" name="followedOnly" value="true" role="switch" checked="@Model.FollowedOnly"/><span>FOLLOWED VENDORS, INDUSTRIES &amp; PRODUCTS</span></label><button class="button button-quiet" type="submit">Search</button></div>
+  <details class="advanced-filters" @((Model.FiltersOpen) ? "open" : null)><summary>ADVANCED FILTERS <span data-filter-summary>@(Model.ActiveFilterCount > 0 ? $"{Model.ActiveFilterCount} active · " : "")industry · vendor · product · MITRE · actor · category</span></summary><div class="filter-grid">
     <label>Industry<select name="industry"><option value="">Any industry</option>@foreach (var value in Model.Industries) { <option value="@value" selected="@(Model.Industry == value)">@value</option> }</select></label>
     <label>Affected vendor<select name="vendor"><option value="">Any vendor</option>@foreach (var value in Model.Vendors) { <option value="@value" selected="@(Model.Vendor == value)">@value</option> }</select></label>
     <label>Affected product<input name="product" list="article-products" value="@Model.Product" placeholder="Any product" title="@Model.Product" autocomplete="off"/><datalist id="article-products">@foreach (var value in Model.Products) { <option value="@value"></option> }</datalist></label>
     <label>MITRE mapping<select name="mitre"><option value="">Any mapping</option>@foreach (var value in Model.MitreMappings) { <option value="@value" selected="@(Model.Mitre == value)">@value</option> }</select></label>
     <label>Threat actor<select name="threatActor"><option value="">Any actor</option>@foreach (var value in Model.ThreatActors) { <option value="@value" selected="@(Model.ThreatActor == value)">@value</option> }</select></label>
-    <label class="followed-filter"><input type="checkbox" name="followedOnly" value="true" checked="@Model.FollowedOnly"/><span>FOLLOWED VENDORS, INDUSTRIES &amp; PRODUCTS</span></label>
     <label>Category<select name="category"><option value="">Any category</option>@foreach (var value in Model.CategoryOptions) { <option value="@value" selected="@(Model.Category == value)">@value</option> }</select></label>
     <label>Sort by<select name="sort"><option value="recent" selected="@(Model.Sort == "recent")">Newest first</option><option value="priority" selected="@(Model.Sort == "priority")">Category priority</option></select></label>
-  </div></details></form>
+ </div></details><span class="sr-only" id="article-filter-status" aria-live="polite"></span></form>
  </div>
  <form method="post" asp-page-handler="Bulk" id="bulk-articles-form" class="bulk-article-toolbar" data-bulk-article-form data-bulk-selection>
    <input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/>
    <label class="bulk-select-all"><input type="checkbox" data-select-visible/><span>SELECT VISIBLE</span></label><span class="bulk-selection-count" data-selection-count aria-live="polite">0 selected</span>
    <div class="bulk-article-actions"><button class="mark-action" type="submit" name="operation" value="read" disabled>MARK READ</button><button class="mark-action" type="submit" name="operation" value="unread" disabled>MARK UNREAD</button><button class="mark-action" type="submit" name="operation" value="analyze" disabled>ANALYZE / RETRY</button><button class="mark-action" type="submit" name="operation" value="reanalyze" disabled>REANALYZE</button></div>
  </form>
+ <div id="article-results" aria-live="polite" aria-busy="false">
  <div class="article-list">
  @if (Model.Articles.Count == 0)
  {
@@ -100,6 +100,7 @@
  }
  </div>
  <div class="list-foot"><span>Showing @Model.Articles.Count most recent matching articles</span><span>⟳ &nbsp;Feed checks run in the background</span></div>
+ </div>
 </section>
 <script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
 (() => {
@@ -142,26 +143,68 @@
   const details = form.querySelector('.advanced-filters');
   const openState = form.querySelector('input[name="filtersOpen"]');
   details?.addEventListener('toggle', () => { if (openState) openState.value = details.open ? 'true' : 'false'; });
-  form.querySelectorAll('select').forEach(select => select.addEventListener('change', () => {
-    if (openState) openState.value = details?.open ? 'true' : 'false';
-    form.requestSubmit();
-  }));
-  form.querySelector('input[name="product"]')?.addEventListener('change', () => {
-    if (openState) openState.value = details?.open ? 'true' : 'false';
-    form.requestSubmit();
-  });
   details?.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       details.open = false;
       if (openState) openState.value = 'false';
     }
   });
-  const search = form.querySelector('input[name="search"]');
+  const status = document.querySelector('#article-filter-status');
+  const bulkForm = document.querySelector('#bulk-articles-form');
+  let controller;
   let timer;
-  search?.addEventListener('input', () => {
+  const updateResults = async () => {
     clearTimeout(timer);
-    timer = setTimeout(() => form.requestSubmit(), 250);
-  });
+    timer = undefined;
+    if (openState) openState.value = details?.open ? 'true' : 'false';
+    const url = new URL(form.action, window.location.href);
+    url.search = new URLSearchParams(new FormData(form)).toString();
+    controller?.abort();
+    controller = new AbortController();
+    const requestController = controller;
+    const results = document.querySelector('#article-results');
+    results?.setAttribute('aria-busy', 'true');
+    if (status) status.textContent = 'Updating articles.';
+    try {
+      const response = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, signal: requestController.signal });
+      if (!response.ok) throw new Error(`Article filter request failed (${response.status}).`);
+      const html = await response.text();
+      const documentCopy = new DOMParser().parseFromString(html, 'text/html');
+      const updatedResults = documentCopy.querySelector('#article-results');
+      if (!updatedResults) throw new Error('Article results were missing from the response.');
+      results?.replaceWith(updatedResults);
+      const count = documentCopy.querySelector('.article-stream-panel .count-chip')?.textContent ?? '0';
+      const countChip = document.querySelector('.article-stream-panel .count-chip');
+      if (countChip) countChip.textContent = count;
+      const summary = document.querySelector('[data-filter-summary]');
+      const updatedSummary = documentCopy.querySelector('[data-filter-summary]');
+      if (summary && updatedSummary) summary.textContent = updatedSummary.textContent;
+      const values = new URLSearchParams(url.search);
+      if (bulkForm) {
+        const formValues = { returnState: values.get('state') ?? 'unread', search: values.get('search') ?? '', industry: values.get('industry') ?? '', vendor: values.get('vendor') ?? '', product: values.get('product') ?? '', mitre: values.get('mitre') ?? '', threatActor: values.get('threatActor') ?? '', followedOnly: values.get('followedOnly') ?? 'false', filtersOpen: values.get('filtersOpen') ?? 'false', category: values.get('category') ?? '', sort: values.get('sort') ?? 'recent' };
+        for (const [name, value] of Object.entries(formValues)) {
+          const field = bulkForm.elements.namedItem(name);
+          if (field) field.value = value;
+        }
+      }
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+      document.dispatchEvent(new Event('inbox-results-updated'));
+      if (status) status.textContent = `Showing ${count} matching articles.`;
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      window.location.assign(url);
+    } finally {
+      if (controller === requestController) document.querySelector('#article-results')?.setAttribute('aria-busy', 'false');
+    }
+  };
+  form.addEventListener('submit', event => { event.preventDefault(); updateResults(); });
+  form.querySelectorAll('select, input[type="checkbox"]').forEach(control => control.addEventListener('change', updateResults));
+  form.querySelectorAll('input[name="search"], input[name="product"]').forEach(input => input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(updateResults, 250);
+  }));
+  const search = form.querySelector('input[name="search"]');
+  search?.addEventListener('keydown', event => { if (event.key === 'Escape') { search.value = ''; updateResults(); } });
 })();
 </script>
 <script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
