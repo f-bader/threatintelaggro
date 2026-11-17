@@ -147,6 +147,7 @@ public static class ArticleEvidenceValidator
     private static string NormalizeEvidenceText(string text)
     {
         var normalized = text.Normalize(System.Text.NormalizationForm.FormKC)
+            .Replace("\u0019", "'", StringComparison.Ordinal)
             .Replace("\u200B", "", StringComparison.Ordinal)
             .Replace("\u200C", "", StringComparison.Ordinal)
             .Replace("\u200D", "", StringComparison.Ordinal)

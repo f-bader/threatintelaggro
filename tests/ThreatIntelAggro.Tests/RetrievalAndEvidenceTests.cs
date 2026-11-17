@@ -150,10 +150,12 @@ public sealed class RetrievalAndEvidenceTests
     public void DetectionBehaviorsRequireVerifiableSourceEvidence()
     {
         var schema = (JsonObject)typeof(AnalysisService).GetMethod("DetectionSchema", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
-        var sources = JsonNode.Parse("""[{"source_id":"src_article","inspection_status":"fetched","content":"The process wrote a file."}]""")!.AsArray();
+        var sources = JsonNode.Parse("""[{"source_id":"src_article","inspection_status":"fetched","content":"The user's process wrote a file."}]""")!.AsArray();
         var detection = JsonNode.Parse("""
-        {"schema_version":"1.1","outcome":"drafts_generated","reason":"fixture","coverage":[],"detections":[{"local_key":"test","alert_title":"test","description":"test","severity":"low","rationale":"test","kql":"DeviceEvents | take 1","tactic":"Execution","techniques":[],"behaviors":[{"description":"file write","basis":"source_reported","confidence":"high","evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"The process wrote a file."}]}],"source_ids":["src_article"],"playbook":{"title":"test","triage_steps":[],"investigation_steps":[],"response_options":[]},"mitre_mappings":[],"telemetry":{"tables":[],"required_columns":[],"assumptions":[],"known_gaps":[]}}]}
+        {"schema_version":"1.1","outcome":"drafts_generated","reason":"fixture","coverage":[],"detections":[{"local_key":"test","alert_title":"test","description":"test","severity":"low","rationale":"test","kql":"DeviceEvents | take 1","tactic":"Execution","techniques":[],"behaviors":[{"description":"file write","basis":"source_reported","confidence":"high","evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"The user's process wrote a file."}]}],"source_ids":["src_article"],"playbook":{"title":"test","triage_steps":[],"investigation_steps":[],"response_options":[]},"mitre_mappings":[],"telemetry":{"tables":[],"required_columns":[],"assumptions":[],"known_gaps":[]}}]}
         """)!;
+        ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema);
+        detection["detections"]![0]!["behaviors"]![0]!["evidence"]![0]!["excerpt"] = "The user\u0019s process wrote a file.";
         ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema);
         var severitySchema = schema["properties"]!["detections"]!["items"]!["properties"]!["severity"]!;
         Assert.Equal(new[] { "informational", "low", "medium", "high" }, severitySchema["enum"]!.AsArray().Select(x => x!.GetValue<string>()));
