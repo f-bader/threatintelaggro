@@ -1,0 +1,246 @@
+@page "/Insights"
+@model InsightsModel
+@{
+    ViewData["Title"] = "Insights";
+}
+<div class="page-heading insight-heading">
+  <div><div class="eyebrow"><span class="live-dot"></span> ENTITY LANDSCAPE / @Model.PeriodLabel</div><h1>Affected entities</h1><p class="subhead">Vendors, industries, and threat actors extracted from analyzed reports.</p></div>
+  <form method="get" class="insight-period-form"><label for="insight-days">TIME WINDOW</label><select id="insight-days" name="days" data-auto-submit><option value="7" selected="@(Model.Days == 7)">Last 7 days</option><option value="30" selected="@(Model.Days == 30)">Last 30 days</option><option value="90" selected="@(Model.Days == 90)">Last 90 days</option><option value="365" selected="@(Model.Days == 365)">Last 12 months</option></select></form>
+</div>
+
+<section class="stat-grid insight-stats" aria-label="Entity overview">
+  <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">REPORTS WITH ENTITIES</div><div class="stat-value">@Model.ArticleCount.ToString("N0")<span class="unit-mark">REPORTS</span></div><div class="stat-note">Unique analyzed articles in this window</div><div class="metric-bar"><i style="width:@(Model.ArticleCount == 0 ? 0 : Math.Min(100, Model.ArticleCount))%"></i></div></div>
+  @foreach (var category in Model.Categories)
+  {
+    <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">@category.Label</div><div class="stat-value">@category.EntityCount.ToString("N0")<span class="unit-mark">ENTITIES</span></div><div class="stat-note">Distinct names in analyzed reports</div><div class="metric-bar"><i style="width:@(category.EntityCount == 0 ? 0 : Math.Min(100, category.EntityCount * 5))%"></i></div></div>
+  }
+</section>
+
+<section class="insight-layout" aria-label="Entity insights">
+  <section class="panel insight-map-panel">
+    <div class="panel-head insight-panel-head"><div class="panel-title"><span class="section-index" aria-hidden="true">Σ</span><div><div class="eyebrow">UNIQUE ARTICLES PER ENTITY</div><h2>Entity volume</h2></div></div><span class="quiet-label">TILE AREA ≈ REPORT COUNT</span></div>
+    <div class="insight-category-toggles" role="group" aria-label="Show or hide entity categories">
+      @foreach (var category in Model.Categories)
+      {
+        <label class="insight-category-toggle insight-toggle-@category.Key"><input type="checkbox" checked data-entity-toggle="@category.Key"/><span class="category-swatch" aria-hidden="true"></span><span>@category.Label</span><span class="insight-toggle-count">@category.EntityCount</span></label>
+      }
+      <button class="insight-clear-entity-filter" type="button" data-clear-entity-filter hidden>CLEAR ENTITY FILTER</button>
+    </div>
+    <p class="insight-map-note" data-entity-filter-status aria-live="polite"><span data-entity-filter-message>Select an entity to focus the map on its co-mentioned entities. Category colors identify the entity type.</span> <a class="insight-related-articles" data-related-articles hidden>SHOW RELATED ARTICLES ↗</a></p>
+    <div class="entity-treemap" data-entity-map role="group" aria-label="Entity volume treemap; tile area is proportional to unique article count">
+      @foreach (var tile in Model.TreemapTiles())
+      {
+        var entity = tile.Entity;
+        var category = Model.Categories.Single(item => item.Key == entity.CategoryKey);
+        var articlesHref = entity.CategoryKey switch
+        {
+          "vendors" => Url.Page("/Inbox", new { state = "all", vendor = entity.Name }),
+          "industries" => Url.Page("/Inbox", new { state = "all", industry = entity.Name }),
+          _ => Url.Page("/Inbox", new { state = "all", threatActor = entity.Name })
+        };
+        <button class="entity-tile insight-category-@category.Key" type="button" style="@tile.Style" data-entity-category="@category.Key" data-entity-key="@Model.EntityKey(entity)" data-entity-related="@Model.RelatedEntityKeysJson(entity)" data-articles-href="@articlesHref" data-article-count="@entity.ArticleCount" aria-pressed="false" aria-label="@category.Label: @entity.Name, @entity.ArticleCount unique articles" title="@category.Label: @entity.Name · @entity.ArticleCount unique articles">
+          <span class="entity-tile-category">@category.Label</span><span class="entity-tile-name">@entity.Name</span><span class="entity-tile-count">@entity.ArticleCount.ToString("N0") @(entity.ArticleCount == 1 ? "ARTICLE" : "ARTICLES")</span>
+        </button>
+      }
+      <div class="entity-treemap-empty" data-entity-map-empty hidden>Enable a category to view entity volume.</div>
+    </div>
+    @if (Model.ArticleCount == 0)
+    {
+      <div class="insight-empty-state"><h3>No analyzed entity data in this time window</h3><p>As articles are analyzed, their affected vendors, industries, and threat actors will appear here.</p><a class="button button-secondary" asp-page="/Inbox">OPEN ARTICLE INBOX</a></div>
+    }
+    <p class="insight-disclaimer">Entity mentions summarize extracted reporting. A shared article mention does not by itself establish a direct relationship.</p>
+  </section>
+
+  <aside class="insight-side-column">
+    <section class="panel insight-activity-panel">
+      <div class="panel-head"><div><div class="eyebrow">REPORTING PACE</div><h2>Entity activity</h2></div><span class="quiet-label">12 PERIODS</span></div>
+      <div class="insight-activity-chart" role="img" aria-label="Line chart of analyzed articles with entities over the @Model.Days day time window">
+        <svg viewBox="0 0 520 166" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+          <defs><linearGradient id="insight-area-gradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#4bb9ca" stop-opacity=".28"/><stop offset="100%" stop-color="#4bb9ca" stop-opacity=".015"/></linearGradient></defs>
+          <line class="insight-activity-grid" x1="38" y1="40" x2="496" y2="40"/><line class="insight-activity-grid" x1="38" y1="86" x2="496" y2="86"/><line class="insight-activity-grid" x1="38" y1="132" x2="496" y2="132"/>
+          <text class="insight-activity-axis-label" x="31" y="43" text-anchor="end">@Model.Activity.Max(bucket => bucket.ArticleCount)</text><text class="insight-activity-axis-label" x="31" y="89" text-anchor="end">@((int)Math.Ceiling(Model.Activity.Max(bucket => bucket.ArticleCount) / 2d))</text><text class="insight-activity-axis-label" x="31" y="135" text-anchor="end">0</text>
+          <polygon class="insight-activity-area" points="@Model.ActivityAreaPoints"/><polyline class="insight-activity-line" points="@Model.ActivityLinePoints"/>
+          @foreach (var bucket in Model.Activity)
+          {
+            <circle class="insight-activity-point" cx="@bucket.X.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)" cy="@bucket.Y.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)" r="3"><title>@bucket.ArticleCount articles around @bucket.Label</title></circle>
+            @Html.Raw(Model.ActivityDateLabelMarkup(bucket))
+          }
+        </svg>
+      </div>
+      <p class="insight-chart-footnote">Analyzed articles with at least one vendor, industry, or actor.</p>
+    </section>
+
+    <section class="panel insight-rising-panel">
+      <div class="panel-head"><div><div class="eyebrow">CURRENT VS PRIOR WINDOW</div><h2>Recently rising</h2></div><span class="quiet-label">DELTA / CURRENT</span></div>
+      @if (Model.RisingEntities.Count == 0)
+      {
+        <p class="insight-no-risers">No entities increased versus the preceding window.</p>
+      }
+      else
+      {
+        <ol class="insight-rising-list">
+          @foreach (var entity in Model.RisingEntities)
+          {
+            var href = entity.CategoryKey switch
+            {
+              "vendors" => Url.Page("/Inbox", new { state = "all", vendor = entity.Name }),
+              "industries" => Url.Page("/Inbox", new { state = "all", industry = entity.Name }),
+              _ => Url.Page("/Inbox", new { state = "all", threatActor = entity.Name })
+            };
+            <li><span class="insight-rising-category">@entity.CategoryLabel</span><a href="@href">@entity.Name</a><span class="insight-rising-count"><span class="insight-change-positive">+@entity.Change</span><small>/ @entity.ArticleCount</small></span></li>
+          }
+        </ol>
+      }
+      <p class="insight-chart-footnote">Change from the preceding window / current unique article count.</p>
+    </section>
+  </aside>
+</section>
+
+<section class="panel co-mention-panel" aria-labelledby="co-mention-title">
+  <div class="panel-head co-mention-head">
+    <div class="panel-title"><span class="section-index" aria-hidden="true">×</span><div><div class="eyebrow">ARTICLE-LEVEL OVERLAP / @Model.PeriodLabel</div><h2 id="co-mention-title">Co-mention matrix</h2></div></div>
+    <span class="quiet-label">TOP 4 PER CATEGORY</span>
+  </div>
+  <p class="co-mention-intro">Each cell counts unique articles that mention both entities. Non-zero cross-category cells open matching articles.</p>
+  @if (Model.CoMentionEntities.Count == 0)
+  {
+    <div class="co-mention-empty">The matrix will populate when analyzed reports contain at least two entities.</div>
+  }
+  else
+  {
+    <div class="co-mention-scroll" role="region" aria-label="Scrollable co-mention matrix" tabindex="0">
+      <table class="co-mention-table">
+        <caption class="sr-only">Unique article co-mention counts for the top four vendors, industries, and threat actors.</caption>
+        <thead><tr><th class="co-mention-corner" scope="col">ENTITY</th>
+          @foreach (var column in Model.CoMentionEntities)
+          {
+            <th class="co-mention-column co-mention-@column.CategoryKey" data-matrix-category-head="@column.CategoryKey" data-entity-key="@Model.EntityKey(column)" scope="col" title="@column.CategoryLabel: @column.Name"><span class="co-mention-category-label">@column.CategoryLabel</span><span class="co-mention-column-name">@column.Name</span></th>
+          }
+        </tr></thead>
+        <tbody>
+          @foreach (var row in Model.CoMentionRows)
+          {
+            <tr data-matrix-row-category="@row.Entity.CategoryKey" data-entity-key="@Model.EntityKey(row.Entity)"><th class="co-mention-row-name co-mention-@row.Entity.CategoryKey" data-matrix-category-row="@row.Entity.CategoryKey" scope="row"><span class="co-mention-category-label">@row.Entity.CategoryLabel</span><span>@row.Entity.Name</span></th>
+              @foreach (var cell in row.Cells)
+              {
+                var count = cell.ArticleCount;
+                var isCrossCategory = row.Entity.CategoryKey != cell.Entity.CategoryKey;
+                var vendor = row.Entity.CategoryKey == "vendors" ? row.Entity.Name : cell.Entity.CategoryKey == "vendors" ? cell.Entity.Name : null;
+                var industry = row.Entity.CategoryKey == "industries" ? row.Entity.Name : cell.Entity.CategoryKey == "industries" ? cell.Entity.Name : null;
+                var actor = row.Entity.CategoryKey == "actors" ? row.Entity.Name : cell.Entity.CategoryKey == "actors" ? cell.Entity.Name : null;
+                var href = count > 0 && isCrossCategory ? Url.Page("/Inbox", new { state = "all", vendor, industry, threatActor = actor }) : null;
+                <td data-matrix-cell data-matrix-row-category="@row.Entity.CategoryKey" data-matrix-column-category="@cell.Entity.CategoryKey" title="@(count.HasValue ? $"{row.Entity.Name} and {cell.Entity.Name}: {count} shared articles" : "Same entity")" style="--co-mention-opacity:@Model.CoMentionOpacity(count)">
+                  @if (count is null) { <span class="co-mention-diagonal">·</span> }
+                  else if (count > 0 && href is not null) { <a href="@href" aria-label="@row.Entity.Name and @cell.Entity.Name, @count shared articles">@count</a> }
+                  else if (count > 0) { <span>@count</span> }
+                  else { <span class="co-mention-zero">—</span> }
+                </td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+    <div class="co-mention-legend"><span>FEWER</span><i class="co-mention-legend-low"></i><i class="co-mention-legend-mid"></i><i class="co-mention-legend-high"></i><span>MORE SHARED ARTICLES</span><span class="co-mention-maximum">MAX @Model.CoMentionMaximum</span></div>
+    <p class="insight-disclaimer co-mention-disclaimer">Co-mentions reflect shared reporting only; they do not establish causation, targeting, or a confirmed relationship. Same-category cells are informational.</p>
+  }
+</section>
+
+@section Scripts {
+  <script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
+    (() => {
+      const map = document.querySelector('[data-entity-map]');
+      const tiles = [...map.querySelectorAll('[data-entity-key]')];
+      const clearButton = document.querySelector('[data-clear-entity-filter]');
+      const status = document.querySelector('[data-entity-filter-message]');
+      const relatedArticles = document.querySelector('[data-related-articles]');
+      let selectedKey = null;
+
+      function layout(items) {
+        function split(group, left, top, width, height) {
+          if (!group.length) return;
+          if (group.length === 1) {
+            const tile = group[0];
+            tile.style.left = `calc(${left}% + 2px)`;
+            tile.style.top = `calc(${top}% + 2px)`;
+            tile.style.width = `calc(${width}% - 4px)`;
+            tile.style.height = `calc(${height}% - 4px)`;
+            return;
+          }
+          const total = group.reduce((sum, tile) => sum + Number(tile.dataset.articleCount), 0);
+          let running = 0, splitAt = 1, closest = Infinity;
+          for (let index = 1; index < group.length; index++) {
+            running += Number(group[index - 1].dataset.articleCount);
+            const distance = Math.abs(total / 2 - running);
+            if (distance < closest) { closest = distance; splitAt = index; }
+          }
+          const first = group.slice(0, splitAt), second = group.slice(splitAt);
+          const weight = first.reduce((sum, tile) => sum + Number(tile.dataset.articleCount), 0);
+          const share = weight / total;
+          if (width >= height) {
+            split(first, left, top, width * share, height);
+            split(second, left + width * share, top, width * (1 - share), height);
+          } else {
+            split(first, left, top, width, height * share);
+            split(second, left, top + height * share, width, height * (1 - share));
+          }
+        }
+        split(items, 0, 0, 100, 100);
+      }
+
+      function refresh() {
+        const enabled = new Set([...document.querySelectorAll('[data-entity-toggle]:checked')].map(toggle => toggle.dataset.entityToggle));
+        let selected = tiles.find(tile => tile.dataset.entityKey === selectedKey);
+        if (selected && !enabled.has(selected.dataset.entityCategory)) {
+          selectedKey = null;
+          selected = null;
+        }
+        const related = selected ? new Set(JSON.parse(selected.dataset.entityRelated)) : null;
+        const visible = tiles.filter(tile => {
+          const categoryVisible = enabled.has(tile.dataset.entityCategory);
+          const matchesSelection = !selected || tile === selected ||
+            (tile.dataset.entityCategory !== selected.dataset.entityCategory && related.has(tile.dataset.entityKey));
+          const show = categoryVisible && matchesSelection;
+          tile.hidden = !show;
+          tile.classList.toggle('is-selected', tile === selected);
+          tile.setAttribute('aria-pressed', String(tile === selected));
+          return show;
+        });
+        layout(visible);
+        map.querySelector('[data-entity-map-empty]').hidden = visible.length > 0 || enabled.size > 0;
+
+        const matrixHeaders = [...document.querySelectorAll('[data-matrix-category-head]')];
+        matrixHeaders.forEach(head => {
+          head.hidden = !enabled.has(head.dataset.matrixCategoryHead) ||
+            (!!selected && head.dataset.entityKey !== selectedKey && !related.has(head.dataset.entityKey));
+        });
+        document.querySelectorAll('tbody tr[data-matrix-row-category]').forEach(row => {
+          const rowMatches = enabled.has(row.dataset.matrixRowCategory) &&
+            (!selected || row.dataset.entityKey === selectedKey || related.has(row.dataset.entityKey));
+          row.hidden = !rowMatches;
+          [...row.cells].slice(1).forEach((cell, index) => {
+            const head = matrixHeaders[index];
+            cell.hidden = !rowMatches || !head || head.hidden;
+          });
+        });
+        clearButton.hidden = !selected;
+        relatedArticles.hidden = !selected;
+        status.textContent = selected
+          ? `${selected.querySelector('.entity-tile-category').textContent}: ${selected.querySelector('.entity-tile-name').textContent} — showing directly co-mentioned entities.`
+          : 'Select an entity to focus the map on its co-mentioned entities. Category colors identify the entity type.';
+        if (selected) {
+          relatedArticles.href = selected.dataset.articlesHref;
+          relatedArticles.setAttribute('aria-label', `Show articles mentioning ${selected.querySelector('.entity-tile-name').textContent}`);
+        }
+      }
+
+      tiles.forEach(tile => tile.addEventListener('click', () => {
+        selectedKey = selectedKey === tile.dataset.entityKey ? null : tile.dataset.entityKey;
+        refresh();
+      }));
+      clearButton.addEventListener('click', () => { selectedKey = null; refresh(); });
+      document.querySelectorAll('[data-entity-toggle]').forEach(toggle => toggle.addEventListener('change', refresh));
+      refresh();
+    })();
+  </script>
+}
