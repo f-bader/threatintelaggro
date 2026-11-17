@@ -98,6 +98,9 @@ public sealed class RetrievalAndEvidenceTests
          "detection_assessment":{"potential":"uncertain","reason":"fixture","evidence":[]},"coverage":{"limitations":[],"uninspected_source_ids":[],"conflicting_claims":[]}}
         """)!;
         ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema);
+        article["summary"]!["evidence"]![0]!["excerpt"] = "malicious domain evil.example was observed.";
+        ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema);
+        article["summary"]!["evidence"]![0]!["excerpt"] = "Malicious domain evil.example was observed.";
         sources[0]!["inspection_status"] = "search_excerpt";
         article["references"]![0]!["inspection_status"] = "search_excerpt";
         ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema);
@@ -110,7 +113,7 @@ public sealed class RetrievalAndEvidenceTests
         Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
         article["summary"]!["evidence"] = summaryEvidence;
         article["iocs"]![0]!["evidence"]![0]!["excerpt"] = "fabricated evil.example";
-        Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
+        Assert.ThrowsAny<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
         article["iocs"]![0]!["evidence"]![0]!["excerpt"] = "Malicious domain evil.example was observed.";
         article["references"]![0]!["url"] = "https://attacker.example/";
         Assert.Throws<InvalidOperationException>(() => ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema));
@@ -147,6 +150,24 @@ public sealed class RetrievalAndEvidenceTests
     }
 
     [Fact]
+    public void EvidenceMismatchCanBeRepairedOnlyWithAnExactSourceExcerpt()
+    {
+        var sources = JsonNode.Parse("""[{"source_id":"src_article","inspection_status":"fetched","content":"The user's process wrote a file — then exited."}]""")!.AsArray();
+        var output = JsonNode.Parse("""{"summary":{"evidence":[{"source_id":"src_article","excerpt":"the user’s process wrote a file-then crashed."}]}}""")!.ToJsonString();
+        var mismatches = ArticleEvidenceValidator.FindEvidenceMismatches(output, sources);
+        var mismatch = Assert.Single(mismatches);
+        Assert.Equal("/summary/evidence/0", mismatch.Path);
+
+        var repaired = ArticleEvidenceValidator.ApplyEvidenceCorrections(output, sources, new JsonArray(
+            new JsonObject { ["path"] = mismatch.Path, ["source_id"] = mismatch.SourceId, ["excerpt"] = "The user's process wrote a file — then exited." }));
+        Assert.Empty(ArticleEvidenceValidator.FindEvidenceMismatches(repaired, sources));
+
+        var ignored = ArticleEvidenceValidator.ApplyEvidenceCorrections(output, sources, new JsonArray(
+            new JsonObject { ["path"] = mismatch.Path, ["source_id"] = mismatch.SourceId, ["excerpt"] = "invented citation" }));
+        Assert.Equal(output, ignored);
+    }
+
+    [Fact]
     public void DetectionBehaviorsRequireVerifiableSourceEvidence()
     {
         var schema = (JsonObject)typeof(AnalysisService).GetMethod("DetectionSchema", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
@@ -154,6 +175,8 @@ public sealed class RetrievalAndEvidenceTests
         var detection = JsonNode.Parse("""
         {"schema_version":"1.1","outcome":"drafts_generated","reason":"fixture","coverage":[],"detections":[{"local_key":"test","alert_title":"test","description":"test","severity":"low","rationale":"test","kql":"DeviceEvents | take 1","tactic":"Execution","techniques":[],"behaviors":[{"description":"file write","basis":"source_reported","confidence":"high","evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"The user's process wrote a file."}]}],"source_ids":["src_article"],"playbook":{"title":"test","triage_steps":[],"investigation_steps":[],"response_options":[]},"mitre_mappings":[],"telemetry":{"tables":[],"required_columns":[],"assumptions":[],"known_gaps":[]}}]}
         """)!;
+        ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema);
+        detection["detections"]![0]!["behaviors"]![0]!["evidence"]![0]!["excerpt"] = "the user’s process wrote a file.";
         ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema);
         detection["detections"]![0]!["behaviors"]![0]!["evidence"]![0]!["excerpt"] = "The user\u0019s process wrote a file.";
         ArticleEvidenceValidator.ValidateDetection(detection.ToJsonString(), sources, schema);

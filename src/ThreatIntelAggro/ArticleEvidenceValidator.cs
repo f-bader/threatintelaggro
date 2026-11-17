@@ -6,6 +6,13 @@ namespace ThreatIntelAggro;
 
 public static class ArticleEvidenceValidator
 {
+    public sealed record EvidenceMismatch(string Path, string SourceId, string Excerpt, string SourceContent);
+
+    public sealed class EvidenceExcerptMismatchException(string message, IReadOnlyList<EvidenceMismatch> mismatches) : InvalidOperationException(message)
+    {
+        public IReadOnlyList<EvidenceMismatch> Mismatches { get; } = mismatches;
+    }
+
     public static void Validate(string json, JsonArray sources, JsonObject schema) => _ = ValidateAndSanitize(json, sources, schema);
 
     public static string ValidateAndSanitize(string json, JsonArray sources, JsonObject schema)
@@ -21,14 +28,15 @@ public static class ArticleEvidenceValidator
             foreach (var property in new[] { "url", "title", "kind", "inspection_status" })
                 if (reference[property]!.GetValue<string>() != source![property]!.GetValue<string>()) Fail("Reference metadata does not match the source ledger.");
         }
-        ValidateEvidence(root["summary"]!["evidence"]!.AsArray(), ledger, true);
+        ValidateEvidence(root["summary"]!["evidence"]!.AsArray(), ledger, true, "/summary/evidence");
+        var findingIndex = 0;
         foreach (var finding in root["summary"]!["key_findings"]!.AsArray())
         {
             CheckAssessment(finding!);
             if (string.IsNullOrWhiteSpace(finding!["text"]!.GetValue<string>())) Fail("A key finding cannot be empty.");
-            ValidateEvidence(finding["evidence"]!.AsArray(), ledger, true);
+            ValidateEvidence(finding["evidence"]!.AsArray(), ledger, true, $"/summary/key_findings/{findingIndex++}/evidence");
         }
-        ValidateEvidence(root["detection_assessment"]!["evidence"]!.AsArray(), ledger, root["detection_assessment"]!["potential"]!.GetValue<string>() == "sufficient");
+        ValidateEvidence(root["detection_assessment"]!["evidence"]!.AsArray(), ledger, root["detection_assessment"]!["potential"]!.GetValue<string>() == "sufficient", "/detection_assessment/evidence");
         var iocIndex = 0;
         foreach (var item in root["iocs"]!.AsArray())
         {
@@ -45,14 +53,16 @@ public static class ArticleEvidenceValidator
             var evidence = ioc["evidence"]!.AsArray();
             if (evidence.Count == 0) Fail("IOC evidence is required.");
             var valueFound = false;
-            foreach (var entry in evidence)
+            for (var evidenceIndex = 0; evidenceIndex < evidence.Count; evidenceIndex++)
             {
+                var entry = evidence[evidenceIndex];
                 var id = entry!["source_id"]!.GetValue<string>();
                 var excerpt = entry["excerpt"]!.GetValue<string>();
                 if (!ledger.TryGetValue(id, out var source) || !IsReadable(source)) Fail("IOC cites an unknown, inaccessible, or undiscovered source.");
                 var content = source!["content"]!.GetValue<string>();
-                if (string.IsNullOrWhiteSpace(entry["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !EvidenceContains(content, excerpt)) Fail("IOC excerpt does not match the stored source text.");
-                if (EvidenceContains(excerpt, value, StringComparison.OrdinalIgnoreCase)) valueFound = true;
+                if (string.IsNullOrWhiteSpace(entry["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000) Fail("IOC evidence is missing a locator or excerpt.");
+                if (!EvidenceContains(content, excerpt)) throw Mismatch($"/iocs/{iocIndex}/evidence/{evidenceIndex}", id, excerpt, content);
+                if (ContainsIndicatorText(excerpt, value)) valueFound = true;
             }
             if (!valueFound) Fail("IOC value is absent from its cited sources.");
             iocIndex++;
@@ -74,7 +84,7 @@ public static class ArticleEvidenceValidator
                     CheckAssessment(mapping);
                     var evidence = mapping["evidence"]!.AsArray();
                     if (evidence.Count == 0) Fail("Mapping evidence is required.");
-                    ValidateEvidence(evidence, ledger, true);
+                    ValidateEvidence(evidence, ledger, true, $"/{field}/{index}/evidence");
                 }
                 catch (InvalidOperationException)
                 {
@@ -97,40 +107,46 @@ public static class ArticleEvidenceValidator
         var outcome = root["outcome"]!.GetValue<string>();
         if ((outcome == "drafts_generated" && detections.Count is < 1 or > 3) || (outcome == "no_supported_detection" && detections.Count != 0)) Fail("Detection outcome and draft count disagree.");
         var keys = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var detection in detections)
+        for (var detectionIndex = 0; detectionIndex < detections.Count; detectionIndex++)
         {
+            var detection = detections[detectionIndex];
             var key = detection!["local_key"]!.GetValue<string>();
             if (string.IsNullOrWhiteSpace(key) || !keys.Add(key) || string.IsNullOrWhiteSpace(detection["alert_title"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(detection["kql"]!.GetValue<string>())) Fail("Detection keys, titles and queries must be present, and keys must be unique.");
             if (detection!["severity"]!.GetValue<string>() is not ("informational" or "low" or "medium" or "high")) Fail("Invalid detection severity.");
             var cited = new HashSet<string>(StringComparer.Ordinal);
             var behaviors = detection["behaviors"]!.AsArray();
             if (behaviors.Count == 0) Fail("Detection behavior evidence is required.");
-            foreach (var behavior in behaviors)
+            for (var behaviorIndex = 0; behaviorIndex < behaviors.Count; behaviorIndex++)
             {
+                var behavior = behaviors[behaviorIndex];
                 CheckAssessment(behavior!);
                 if (string.IsNullOrWhiteSpace(behavior!["description"]!.GetValue<string>())) Fail("Detection behavior cannot be empty.");
-                cited.UnionWith(ValidateEvidence(behavior["evidence"]!.AsArray(), ledger, true));
+                cited.UnionWith(ValidateEvidence(behavior["evidence"]!.AsArray(), ledger, true, $"/detections/{detectionIndex}/behaviors/{behaviorIndex}/evidence"));
             }
-            foreach (var mapping in detection["mitre_mappings"]!.AsArray())
+            for (var mappingIndex = 0; mappingIndex < detection["mitre_mappings"]!.AsArray().Count; mappingIndex++)
             {
+                var mapping = detection["mitre_mappings"]![mappingIndex];
                 CheckAssessment(mapping!);
-                cited.UnionWith(ValidateEvidence(mapping!["evidence"]!.AsArray(), ledger, true));
+                cited.UnionWith(ValidateEvidence(mapping!["evidence"]!.AsArray(), ledger, true, $"/detections/{detectionIndex}/mitre_mappings/{mappingIndex}/evidence"));
             }
             var declared = detection["source_ids"]!.AsArray().Select(x => x!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
             if (declared.Count == 0 || declared.Any(id => !ledger.TryGetValue(id, out var source) || !IsReadable(source)) || !cited.IsSubsetOf(declared)) Fail("Detection source IDs do not match readable evidence.");
         }
     }
 
-    private static HashSet<string> ValidateEvidence(JsonArray evidence, Dictionary<string, JsonNode> ledger, bool required)
+    private static HashSet<string> ValidateEvidence(JsonArray evidence, Dictionary<string, JsonNode> ledger, bool required, string path)
     {
         if (required && evidence.Count == 0) Fail("Evidence is required.");
         var cited = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var item in evidence)
+        for (var index = 0; index < evidence.Count; index++)
         {
+            var item = evidence[index];
             var id = item!["source_id"]!.GetValue<string>();
             var excerpt = item["excerpt"]!.GetValue<string>();
             if (!ledger.TryGetValue(id, out var source) || !IsReadable(source)) Fail("Evidence cites an unknown, inaccessible, or undiscovered source.");
-            if (string.IsNullOrWhiteSpace(item["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000 || !EvidenceContains(source!["content"]!.GetValue<string>(), excerpt, StringComparison.Ordinal)) Fail("Evidence excerpt does not match the stored source text.");
+            if (string.IsNullOrWhiteSpace(item["locator"]!.GetValue<string>()) || string.IsNullOrWhiteSpace(excerpt) || excerpt.Length > 2000) Fail("Evidence is missing a locator or excerpt.");
+            var content = source!["content"]!.GetValue<string>();
+            if (!EvidenceContains(content, excerpt)) throw Mismatch($"{path}/{index}", id, excerpt, content);
             cited.Add(id);
         }
         return cited;
@@ -138,13 +154,95 @@ public static class ArticleEvidenceValidator
 
     private static bool IsReadable(JsonNode source) => source["inspection_status"]?.GetValue<string>() is "fetched" or "search_excerpt";
 
-    private static bool EvidenceContains(string source, string excerpt, StringComparison comparison = StringComparison.Ordinal)
+    private static bool EvidenceContains(string source, string excerpt, StringComparison comparison = StringComparison.OrdinalIgnoreCase)
     {
         if (source.Contains(excerpt, comparison)) return true;
         return NormalizeEvidenceText(source).Contains(NormalizeEvidenceText(excerpt), comparison);
     }
 
     private static string NormalizeEvidenceText(string text)
+    {
+        var normalized = text.Normalize(System.Text.NormalizationForm.FormKC)
+            .Replace("\u0019", "'", StringComparison.Ordinal)
+            .Replace('’', '\'').Replace('‘', '\'').Replace('“', '"').Replace('”', '"').Replace('„', '"')
+            .Replace('–', '-').Replace('—', '-').Replace('−', '-')
+            .Replace("…", "...", StringComparison.Ordinal)
+            .Replace("\u200B", "", StringComparison.Ordinal)
+            .Replace("\u200C", "", StringComparison.Ordinal)
+            .Replace("\u200D", "", StringComparison.Ordinal)
+            .Replace("\uFEFF", "", StringComparison.Ordinal);
+        normalized = Regex.Replace(normalized, @"\s+", " ").Trim();
+        normalized = Regex.Replace(normalized, @"\s+([,.;:!?])", "$1");
+        normalized = Regex.Replace(normalized, @"\s*-\s*", "-");
+        return normalized;
+    }
+
+    public static IReadOnlyList<EvidenceMismatch> FindEvidenceMismatches(string json, JsonArray sources)
+    {
+        var root = JsonNode.Parse(json) ?? throw new InvalidOperationException("Analysis output is empty.");
+        var ledger = sources.ToDictionary(x => x!["source_id"]!.GetValue<string>(), x => x!, StringComparer.Ordinal);
+        var mismatches = new List<EvidenceMismatch>();
+        Walk(root, "");
+        return mismatches;
+
+        void Walk(JsonNode? node, string path)
+        {
+            if (node is JsonObject obj)
+            {
+                foreach (var pair in obj)
+                {
+                    var childPath = path + "/" + pair.Key.Replace("~", "~0").Replace("/", "~1");
+                    if (pair.Key == "evidence" && pair.Value is JsonArray evidence)
+                    {
+                        for (var i = 0; i < evidence.Count; i++)
+                        {
+                            if (evidence[i] is not JsonObject item || item["source_id"] is not JsonValue sid || !sid.TryGetValue<string>(out var id) || item["excerpt"] is not JsonValue ex || !ex.TryGetValue<string>(out var excerpt)) continue;
+                            if (ledger.TryGetValue(id, out var source) && source["content"] is JsonValue contentNode && contentNode.TryGetValue<string>(out var content) && !EvidenceContains(content, excerpt))
+                                mismatches.Add(new EvidenceMismatch($"{childPath}/{i}", id, excerpt, content));
+                        }
+                    }
+                    else Walk(pair.Value, childPath);
+                }
+            }
+            else if (node is JsonArray array)
+                for (var i = 0; i < array.Count; i++) Walk(array[i], path + "/" + i);
+        }
+    }
+
+    public static string ApplyEvidenceCorrections(string json, JsonArray sources, JsonArray corrections)
+    {
+        var root = JsonNode.Parse(json) ?? throw new InvalidOperationException("Analysis output is empty.");
+        var ledger = sources.ToDictionary(x => x!["source_id"]!.GetValue<string>(), x => x!, StringComparer.Ordinal);
+        var allowed = FindEvidenceMismatches(json, sources).ToDictionary(x => (x.Path, x.SourceId));
+        foreach (var correction in corrections)
+        {
+            var path = correction!["path"]!.GetValue<string>();
+            var sourceId = correction["source_id"]!.GetValue<string>();
+            var excerpt = correction["excerpt"]!.GetValue<string>();
+            if (!allowed.ContainsKey((path, sourceId)) || !ledger.TryGetValue(sourceId, out var source) || !source["content"]!.GetValue<string>().Contains(excerpt, StringComparison.Ordinal)) continue;
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Replace("~1", "/").Replace("~0", "~")).ToArray();
+            JsonNode? current = root;
+            for (var i = 0; i < segments.Length && current is not null; i++) current = current is JsonArray array && int.TryParse(segments[i], out var index) ? array[index] : current[segments[i]];
+            if (current is JsonObject obj && obj["source_id"]?.GetValue<string>() == sourceId) obj["excerpt"] = excerpt;
+        }
+        return root.ToJsonString();
+    }
+
+    private static EvidenceExcerptMismatchException Mismatch(string path, string sourceId, string excerpt, string source)
+    {
+        var mismatch = new EvidenceMismatch(path, sourceId, excerpt, source);
+        return new EvidenceExcerptMismatchException($"Evidence excerpt does not match stored source text at {path} (source {sourceId}).", [mismatch]);
+    }
+
+    private static bool ContainsIndicatorText(string text, string indicator)
+    {
+        if (text.Contains(indicator, StringComparison.OrdinalIgnoreCase)) return true;
+        var source = NormalizeIndicatorEvidenceText(text);
+        var value = NormalizeIndicatorEvidenceText(indicator);
+        return source.Contains(value, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeIndicatorEvidenceText(string text)
     {
         var normalized = text.Normalize(System.Text.NormalizationForm.FormKC)
             .Replace("\u0019", "'", StringComparison.Ordinal)
