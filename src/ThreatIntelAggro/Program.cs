@@ -13,7 +13,7 @@ if (args.Length > 0 && args[0] == "--restore-backup")
 
 var builder = WebApplication.CreateBuilder(args);
 if (builder.Environment.IsDevelopment()) builder.Configuration.AddUserSecrets<Program>(optional: true);
-builder.Services.AddRazorPages();
+builder.Services.AddRazorPages(options => options.Conventions.AddPageRoute("/Inbox", "/"));
 var trustedProxyIps = (builder.Configuration["AGGRO_TRUSTED_PROXY_IPS"] ?? "")
     .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 builder.Services.Configure<ForwardedHeadersOptions>(options => ForwardedProxyPolicy.Configure(options, trustedProxyIps));

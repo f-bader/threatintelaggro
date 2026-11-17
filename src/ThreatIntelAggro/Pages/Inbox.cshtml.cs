@@ -14,13 +14,14 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
     public int FeedCount { get; private set; }
     public int TodayCount { get; private set; }
     public int TotalCount { get; private set; }
+    public int DisplaySummaryLimit => 500;
     public string[] Industries { get; private set; } = [];
     public string[] Vendors { get; private set; } = [];
     public string[] Products { get; private set; } = [];
     public string[] MitreMappings { get; private set; } = [];
     public string[] ThreatActors { get; private set; } = [];
     public string[] CategoryOptions => ArticleCategories.PriorityOrder;
-    public int ActiveFilterCount => new[] { Industry, Vendor, Product, Mitre, ThreatActor, Category }.Count(x => !string.IsNullOrWhiteSpace(x));
+    public int ActiveFilterCount => new[] { Industry, Vendor, Product, Mitre, ThreatActor, Category }.Count(x => !string.IsNullOrWhiteSpace(x)) + (FollowedOnly ? 1 : 0);
     public string[] VisibleIocs(System.Text.Json.JsonElement root, string? articleId) => IocIndex.IocValues(database, root, articleId);
     public int DetectionCount(string? articleId) => long.TryParse(articleId, out var id) ? database.ScalarInt("SELECT COUNT(*) FROM detections WHERE article_id=?", id) : 0;
     [TempData] public string? Notice { get; set; }
@@ -31,6 +32,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
     [BindProperty(SupportsGet = true)] public string? Product { get; set; }
     [BindProperty(SupportsGet = true)] public string? Mitre { get; set; }
     [BindProperty(SupportsGet = true)] public string? ThreatActor { get; set; }
+    [BindProperty(SupportsGet = true)] public bool FollowedOnly { get; set; }
     [BindProperty(SupportsGet = true)] public bool FiltersOpen { get; set; }
     [BindProperty(SupportsGet = true)] public string? Category { get; set; }
     [BindProperty(SupportsGet = true)] public string Sort { get; set; } = "recent";
@@ -52,6 +54,9 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
         Products = IocIndex.Options(database, "products");
         MitreMappings = IocIndex.Options(database, "mitre_mappings");
         ThreatActors = IocIndex.Options(database, "threat_actors");
+        var follows = database.Query("SELECT kind,name FROM briefing_follows WHERE is_enabled=1")
+            .Select(x => (Kind: x["kind"] ?? "", Name: x["name"] ?? ""))
+            .Where(x => x.Name.Length > 0).ToArray();
         var conditions = new List<string>();
         var args = new List<object?>();
         if (State == "unread") conditions.Add("is_read=0");
@@ -68,7 +73,32 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
             ? "CASE category WHEN 'Time-Critical Threat' THEN 0 WHEN 'Novel Research' THEN 1 WHEN 'Actionable IOCs' THEN 2 WHEN 'Existing Research' THEN 3 ELSE 4 END,COALESCE(published_utc,first_seen_utc) DESC"
             : "COALESCE(published_utc,first_seen_utc) DESC";
         var articles = database.Query($"SELECT id,title,url,summary,published_utc,first_seen_utc,is_read,feed_title,ai_status,ai_error,analysis_json,source_ledger_json,screenshot_metadata_json,CASE WHEN screenshot_data_url IS NOT NULL THEN '1' ELSE '0' END AS has_screenshot,category FROM articles {where} ORDER BY {ordering} LIMIT 1000", args.ToArray());
-        Articles = articles.Where(MatchesMappings).Take(100).ToArray();
+        Articles = articles.Where(MatchesMappings).Where(article => !FollowedOnly || MatchesFollowed(article, follows)).Take(100).ToArray();
+    }
+
+    public string DisplaySummary(string? summary)
+    {
+        var text = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(summary ?? "", "<[^>]+>", " "));
+        text = System.Text.RegularExpressions.Regex.Replace(text, "\\s+", " ").Trim();
+        return text.Length > DisplaySummaryLimit ? text[..DisplaySummaryLimit].TrimEnd() + " […]" : text;
+    }
+
+    private static bool MatchesFollowed(Dictionary<string, string?> article, (string Kind, string Name)[] follows)
+    {
+        if (follows.Length == 0 || string.IsNullOrWhiteSpace(article["analysis_json"])) return false;
+        try
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(article["analysis_json"]!);
+            var root = json.RootElement;
+            return follows.Any(follow => IocIndex.Values(root, follow.Kind switch
+            {
+                "vendor" => "vendors",
+                "industry" => "industries",
+                "product" => "products",
+                _ => ""
+            }).Any(candidate => BriefingMatcher.Matches(follow.Name, candidate)));
+        }
+        catch (System.Text.Json.JsonException) { return false; }
     }
 
     public string CategoryClass(string? category) => ArticleCategories.Normalize(category) switch
@@ -125,11 +155,11 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
         catch (FormatException) { return NotFound(); }
     }
 
-    public IActionResult OnPostCategory(long id, string? selectedCategory, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? categoryFilter, string? sort)
+    public IActionResult OnPostCategory(long id, string? selectedCategory, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? categoryFilter, string? sort, bool followedOnly = false)
     {
         if (ArticleCategories.IsValid(selectedCategory))
             database.Execute("UPDATE articles SET category=?,category_manual=1 WHERE id=?", ArticleCategories.Normalize(selectedCategory), id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category = categoryFilter, sort = sort == "priority" ? "priority" : "recent" });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category = categoryFilter, sort = sort == "priority" ? "priority" : "recent", followedOnly });
     }
 
     private void RefreshAdHocSummaries()
@@ -160,31 +190,31 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
         catch (System.Text.Json.JsonException) { return false; }
     }
 
-    public IActionResult OnPostRead(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
+    public IActionResult OnPostRead(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false)
     {
         database.Execute("UPDATE articles SET is_read=1 WHERE id=?", id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly });
     }
 
-    public IActionResult OnPostUnread(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
+    public IActionResult OnPostUnread(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false)
     {
         database.Execute("UPDATE articles SET is_read=0 WHERE id=?", id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly });
     }
 
-    public IActionResult OnPostAnalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
+    public IActionResult OnPostAnalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false)
     {
         analyzer.QueueAnalysis(id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly });
     }
 
-    public IActionResult OnPostReanalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
+    public IActionResult OnPostReanalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false)
     {
         analyzer.QueueReanalysis(id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly });
     }
 
-    public IActionResult OnPostBulk(string? operation, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort)
+    public IActionResult OnPostBulk(string? operation, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false)
     {
         var ids = SelectedIds.Distinct().Where(id => id > 0).Take(100).ToArray();
         var changed = 0;
@@ -215,7 +245,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer) : PageMo
             "reanalyze" => $"Queued {changed} analyzed article(s) for reanalysis.",
             _ => "No bulk action was applied."
         };
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort = sort == "priority" ? "priority" : "recent" });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort = sort == "priority" ? "priority" : "recent", followedOnly });
     }
 
     public async Task<IActionResult> OnPostAdHocAnalyze(CancellationToken cancellationToken)

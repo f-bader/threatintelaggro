@@ -35,10 +35,59 @@ public sealed class ArticleProductTests
         var id = long.Parse(fixture.Database.Query("SELECT id FROM articles WHERE title='With product'").Single()["id"]!);
         var page = new InboxModel(fixture.Database, null!) { Product = "Acme Gateway" };
 
-        var redirect = Assert.IsType<RedirectToPageResult>(page.OnPostRead(id, "all", null, null, null, null, null, true, null, "recent"));
+        var redirect = Assert.IsType<RedirectToPageResult>(page.OnPostRead(id, "all", null, null, null, null, null, true, null, "recent", true));
 
         Assert.Equal("Acme Gateway", redirect.RouteValues!["product"]);
+        Assert.Equal(true, redirect.RouteValues["followedOnly"]);
         Assert.Equal("1", fixture.Database.Query("SELECT is_read FROM articles WHERE id=?", id).Single()["is_read"]);
+    }
+
+    [Theory]
+    [InlineData("vendor", "Acme")]
+    [InlineData("industry", "Healthcare")]
+    [InlineData("product", "Acme Gateway")]
+    public void Followed_filter_matches_enabled_vendor_industry_and_product_follows(string kind, string name)
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var json = $$"""
+        {"products":[{"name":"Acme Gateway","vendor_name":"Acme","affected_versions":["3.2.1"],"affected_role":"exploited"}],"industries":[{"name":"Healthcare"}],"vendors":[{"name":"Acme"}],"mitre_mappings":[],"threat_actors":[]}
+        """;
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,ai_status,analysis_json) VALUES('Fixture','Followed match','https://example.test/match','',?,'analyzed',?)", DateTimeOffset.UtcNow.ToString("O"), json);
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,ai_status,analysis_json) VALUES('Fixture','No match','https://example.test/other','',?,'analyzed',?)", DateTimeOffset.UtcNow.ToString("O"), "{\"products\":[],\"industries\":[],\"vendors\":[],\"mitre_mappings\":[],\"threat_actors\":[]}");
+        db.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES(?,?,1,0)", kind, name);
+        var page = new InboxModel(db, null!) { FollowedOnly = true, State = "all" };
+
+        page.OnGet();
+
+        Assert.Single(page.Articles);
+        Assert.Equal("Followed match", page.Articles[0]["title"]);
+    }
+
+    [Fact]
+    public void Followed_filter_excludes_articles_when_all_follows_are_disabled()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        Insert(db, "Acme Gateway", "Acme Gateway");
+        db.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES('product','Acme Gateway',0,0)");
+        var page = new InboxModel(db, null!) { FollowedOnly = true, State = "all" };
+
+        page.OnGet();
+
+        Assert.Empty(page.Articles);
+    }
+
+    [Fact]
+    public void Inbox_summary_display_is_capped_at_500_characters_plus_truncation_marker()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var page = new InboxModel(fixture.Database, null!);
+
+        var displayed = page.DisplaySummary(new string('x', 700));
+
+        Assert.Equal(504, displayed.Length);
+        Assert.EndsWith(" […]", displayed);
     }
 
     [Fact]

@@ -26,7 +26,7 @@ OpenAI is the primary AI provider. Azure OpenAI is an optional provider with exp
 
 ## Daily threat briefings
 
-Briefings is the default start tab; Inbox remains available as its own tab. In Settings, follow affected vendors and industries from analyzed article metadata or add custom names. Entries can be disabled without removing them. Briefings match analyzed articles in the previous 24-hour UTC window using normalized and conservative fuzzy matching, and preserve each match in the archived snapshot.
+Inbox is the default start page and first workspace tab; Briefings is the second tab. In Settings, follow affected vendors and industries from analyzed article metadata or add custom names. Entries can be disabled without removing them. Briefings match analyzed articles in the previous 24-hour UTC window using normalized and conservative fuzzy matching, and preserve each match in the archived snapshot.
 
 The background scheduler defaults to 06:00 UTC, backfills missed daily windows, and waits for in-progress article analyses before closing a window. It does not create a briefing when no followed vendor, industry, or product matches an analyzed article. A briefing includes an AI-written executive summary, clean links to applicable articles with matched vendor/industry/product names, relevant unarchived detections with descriptions, and a deduplicated IOC overview with defanged values, types, and classifications. The system prompt is editable in Settings; clearing it and saving restores the displayed default. Generation uses the configured AI model. Settings also provide manual generation and a schedule enable/disable control.
 
