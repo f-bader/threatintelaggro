@@ -64,7 +64,7 @@ public static class ArticleEvidenceValidator
                 if (!EvidenceContains(content, excerpt)) throw Mismatch($"/iocs/{iocIndex}/evidence/{evidenceIndex}", id, excerpt, content);
                 if (ContainsIndicatorText(excerpt, value)) valueFound = true;
             }
-            if (!valueFound) Fail("IOC value is absent from its cited sources.");
+            if (!valueFound) Fail($"iocs[{iocIndex}] value '{value}' is absent from its cited evidence excerpts.");
             iocIndex++;
         }
         var sectorIds = new HashSet<string>(["government","defense","healthcare","financial_services","technology","telecommunications","energy","utilities","manufacturing","transportation","retail","education","media","professional_services","hospitality","agriculture","nonprofit","other"], StringComparer.Ordinal);
@@ -157,16 +157,22 @@ public static class ArticleEvidenceValidator
     private static bool EvidenceContains(string source, string excerpt, StringComparison comparison = StringComparison.OrdinalIgnoreCase)
     {
         if (source.Contains(excerpt, comparison)) return true;
-        return NormalizeEvidenceText(source).Contains(NormalizeEvidenceText(excerpt), comparison);
+        var normalizedSource = NormalizeEvidenceText(source);
+        var normalizedExcerpt = NormalizeEvidenceText(excerpt);
+        return normalizedExcerpt.Length > 0 && normalizedSource.Contains(normalizedExcerpt, comparison);
     }
 
     private static string NormalizeEvidenceText(string text)
     {
-        var normalized = text.Normalize(System.Text.NormalizationForm.FormKC)
+        // Source bodies are flattened from HTML while the model sees their serialized text.
+        // Decode entities and normalize common Unicode/whitespace differences before checking
+        // that a citation is still a contiguous excerpt of the stored source.
+        var normalized = WebUtility.HtmlDecode(text).Normalize(System.Text.NormalizationForm.FormKC)
             .Replace("\u0019", "'", StringComparison.Ordinal)
             .Replace('’', '\'').Replace('‘', '\'').Replace('“', '"').Replace('”', '"').Replace('„', '"')
             .Replace('–', '-').Replace('—', '-').Replace('−', '-')
             .Replace("…", "...", StringComparison.Ordinal)
+            .Replace("\u00AD", "", StringComparison.Ordinal)
             .Replace("\u200B", "", StringComparison.Ordinal)
             .Replace("\u200C", "", StringComparison.Ordinal)
             .Replace("\u200D", "", StringComparison.Ordinal)
@@ -219,7 +225,7 @@ public static class ArticleEvidenceValidator
             var path = correction!["path"]!.GetValue<string>();
             var sourceId = correction["source_id"]!.GetValue<string>();
             var excerpt = correction["excerpt"]!.GetValue<string>();
-            if (!allowed.ContainsKey((path, sourceId)) || !ledger.TryGetValue(sourceId, out var source) || !source["content"]!.GetValue<string>().Contains(excerpt, StringComparison.Ordinal)) continue;
+            if (!allowed.ContainsKey((path, sourceId)) || !ledger.TryGetValue(sourceId, out var source) || !EvidenceContains(source["content"]!.GetValue<string>(), excerpt)) continue;
             var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Replace("~1", "/").Replace("~0", "~")).ToArray();
             JsonNode? current = root;
             for (var i = 0; i < segments.Length && current is not null; i++) current = current is JsonArray array && int.TryParse(segments[i], out var index) ? array[index] : current[segments[i]];
@@ -237,8 +243,8 @@ public static class ArticleEvidenceValidator
     private static bool ContainsIndicatorText(string text, string indicator)
     {
         if (text.Contains(indicator, StringComparison.OrdinalIgnoreCase)) return true;
-        var source = NormalizeIndicatorEvidenceText(text);
-        var value = NormalizeIndicatorEvidenceText(indicator);
+        var source = NormalizeIndicatorEvidenceText(IndicatorNormalization.Normalize(text));
+        var value = NormalizeIndicatorEvidenceText(IndicatorNormalization.Normalize(indicator));
         return source.Contains(value, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -268,13 +274,27 @@ public static class ArticleEvidenceValidator
             "sha1" => Regex.IsMatch(value, "^[0-9a-fA-F]{40}$"),
             "sha256" => Regex.IsMatch(value, "^[0-9a-fA-F]{64}$"),
             "domain" => Uri.CheckHostName(value) == UriHostNameType.Dns && value.Contains('.'),
-            "url" => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && string.IsNullOrEmpty(uri.UserInfo),
+            "url" => IsHttpUrlIndicator(value),
             "email" => System.Net.Mail.MailAddress.TryCreate(value, out var email) && email.Address == value,
             "file_name" or "file_path" or "registry_key" or "mutex" or "certificate_thumbprint" => !string.IsNullOrWhiteSpace(value),
             _ => false
         };
         if (!valid) Fail("Invalid or unsupported IOC type/value.");
     }
+
+    private static bool IsHttpUrlIndicator(string value)
+    {
+        if (Uri.TryCreate(value, UriKind.Absolute, out var absolute))
+        {
+            if (absolute.Scheme is "http" or "https")
+                return string.IsNullOrEmpty(absolute.UserInfo) && IsUrlHost(absolute.Host);
+        }
+        if (value.Contains("://", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(value)) return false;
+        return Uri.TryCreate($"https://{value}", UriKind.Absolute, out var relative) &&
+            relative.Scheme == "https" && string.IsNullOrEmpty(relative.UserInfo) && IsUrlHost(relative.Host);
+    }
+
+    private static bool IsUrlHost(string host) => Uri.CheckHostName(host) is UriHostNameType.Dns or UriHostNameType.IPv4 or UriHostNameType.IPv6;
 
     private static void CheckSchema(JsonNode? value, JsonObject schema, string path)
     {

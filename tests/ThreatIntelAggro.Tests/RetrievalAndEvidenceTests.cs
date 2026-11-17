@@ -150,6 +150,27 @@ public sealed class RetrievalAndEvidenceTests
     }
 
     [Fact]
+    public void ArticleSchemaConstrainsEvidenceLabelsAndAcceptsDefangedBareUrlIndicators()
+    {
+        var schema = (JsonObject)typeof(AnalysisService).GetMethod("ArticleSchema", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
+        var labelProperties = schema["properties"]!["iocs"]!["items"]!["properties"]!;
+        Assert.Equal(new[] { "low", "medium", "high" }, labelProperties["confidence"]!["enum"]!.AsArray().Select(x => x!.GetValue<string>()));
+        Assert.Equal(new[] { "source_reported", "inferred" }, labelProperties["basis"]!["enum"]!.AsArray().Select(x => x!.GetValue<string>()));
+
+        var sources = JsonNode.Parse("""[{"source_id":"src_article","title":"Fixture","url":"https://example.com/","kind":"original","inspection_status":"fetched","content":"Observed short link bit[.]ly/19BFiM in the campaign."}]""")!.AsArray();
+        var article = JsonNode.Parse("""
+        {"schema_version":"1.2","language":"en","category":"Actionable IOCs","category_rationale":"fixture",
+         "summary":{"headline":"fixture","overview":"fixture","key_findings":[],"evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"Observed short link bit[.]ly/19BFiM in the campaign."}]},
+         "iocs":[{"type":"url","value":"bit.ly/19BFiM","normalized_value":null,"role":"suspicious","context":"reported short URL","confidence":"high","basis":"source_reported","evidence":[{"source_id":"src_article","locator":"paragraph 1","excerpt":"Observed short link bit[.]ly/19BFiM in the campaign."}]}],
+         "references":[{"source_id":"src_article","url":"https://example.com/","title":"Fixture","kind":"original","inspection_status":"fetched","relevance":"original"}],
+         "mitre_mappings":[],"industries":[],"threat_actors":[],"vendors":[],"products":[],"malware":[],"campaigns":[],"vulnerabilities":[],"targeted_countries":[],
+         "detection_assessment":{"potential":"uncertain","reason":"fixture","evidence":[]},"coverage":{"limitations":[],"uninspected_source_ids":[],"conflicting_claims":[]}}
+        """)!;
+
+        ArticleEvidenceValidator.Validate(article.ToJsonString(), sources, schema);
+    }
+
+    [Fact]
     public void EvidenceMismatchCanBeRepairedOnlyWithAnExactSourceExcerpt()
     {
         var sources = JsonNode.Parse("""[{"source_id":"src_article","inspection_status":"fetched","content":"The user's process wrote a file — then exited."}]""")!.AsArray();

@@ -27,6 +27,7 @@ public sealed class AppDatabase : IDisposable
                 CREATE TABLE IF NOT EXISTS feeds (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, url TEXT NOT NULL UNIQUE,
                     interval_hours INTEGER NOT NULL DEFAULT 6, enabled INTEGER NOT NULL DEFAULT 1, ioc_auto_approve INTEGER NOT NULL DEFAULT 0,
+                    source_type TEXT NOT NULL DEFAULT 'rss',
                     last_checked_utc TEXT, last_error TEXT, created_utc TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS articles (
@@ -88,6 +89,7 @@ public sealed class AppDatabase : IDisposable
             // Upgrade databases created by earlier local builds.
             foreach (var migration in new[] {
                 "ALTER TABLE feeds ADD COLUMN ioc_auto_approve INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE feeds ADD COLUMN source_type TEXT NOT NULL DEFAULT 'rss'",
                 "ALTER TABLE articles ADD COLUMN ai_status TEXT NOT NULL DEFAULT 'pending'",
                 "ALTER TABLE articles ADD COLUMN ai_error TEXT",
                 "ALTER TABLE articles ADD COLUMN content_text TEXT NOT NULL DEFAULT ''",

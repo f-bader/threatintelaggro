@@ -23,7 +23,7 @@ public sealed record AiModelSettings(
         "research" => (Choose(ResearchModel), ChooseEffort(ResearchEffort)),
         "article-analysis" => (Choose(ArticleModel), ChooseEffort(ArticleEffort)),
         "detection-generation" => (Choose(DetectionModel), ChooseEffort(DetectionEffort)),
-        _ when stage.StartsWith("kql-repair-", StringComparison.Ordinal) => (Choose(RepairModel), ChooseEffort(RepairEffort)),
+        _ when stage.StartsWith("kql-repair-", StringComparison.Ordinal) || stage.EndsWith("-evidence-repair", StringComparison.Ordinal) || stage.EndsWith("-validation-repair", StringComparison.Ordinal) => (Choose(RepairModel), ChooseEffort(RepairEffort)),
         _ => (Model, Effort.Length == 0 ? null : Effort)
     };
 

@@ -7,15 +7,22 @@ using System.Text.RegularExpressions;
 
 namespace ThreatIntelAggro;
 
-public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, ILogger<FeedReader> log)
+public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, ILogger<FeedReader> log, GitHubAdvisoryReader githubAdvisories)
 {
     public async Task<int> RefreshAsync(long feedId, CancellationToken cancellationToken = default)
     {
-        var feed = database.Query("SELECT id,title,url,interval_hours FROM feeds WHERE id=? AND enabled=1", feedId).FirstOrDefault();
+        var feed = database.Query("SELECT id,title,url,interval_hours,source_type FROM feeds WHERE id=? AND enabled=1", feedId).FirstOrDefault();
         if (feed is null) return 0;
         var url = feed["url"]!;
         try
         {
+            if (feed.GetValueOrDefault("source_type") == "github")
+            {
+                var count = await githubAdvisories.RefreshAsync(database, feedId, feed["title"] ?? "GitHub advisories", url, cancellationToken);
+                database.Execute("UPDATE feeds SET last_checked_utc=?,last_error=NULL WHERE id=?", DateTimeOffset.UtcNow.ToString("O"), feedId);
+                log.LogInformation("GitHub advisory source {FeedId} refresh found {ArticleCount} new entries", feedId, count);
+                return count;
+            }
             var bytes = await fetcher.GetAsync(url, 10 * 1024 * 1024, TimeSpan.FromSeconds(25), cancellationToken);
             using var text = new StringReader(CleanXmlCharacters(DecodeXml(bytes)));
             using var reader = XmlReader.Create(text, new XmlReaderSettings
