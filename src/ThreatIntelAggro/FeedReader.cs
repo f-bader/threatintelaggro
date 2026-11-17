@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 
 namespace ThreatIntelAggro;
 
-public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, ILogger<FeedReader> log, GitHubAdvisoryReader githubAdvisories)
+public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, ILogger<FeedReader> log, GitHubAdvisoryReader? githubAdvisories = null)
 {
     public async Task<int> RefreshAsync(long feedId, CancellationToken cancellationToken = default)
     {
@@ -18,7 +18,8 @@ public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, 
         {
             if (feed.GetValueOrDefault("source_type") == "github")
             {
-                var count = await githubAdvisories.RefreshAsync(database, feedId, feed["title"] ?? "GitHub advisories", url, cancellationToken);
+                var count = await (githubAdvisories ?? throw new InvalidOperationException("GitHub advisory collection is not configured."))
+                    .RefreshAsync(database, feedId, feed["title"] ?? "GitHub advisories", url, cancellationToken);
                 database.Execute("UPDATE feeds SET last_checked_utc=?,last_error=NULL WHERE id=?", DateTimeOffset.UtcNow.ToString("O"), feedId);
                 log.LogInformation("GitHub advisory source {FeedId} refresh found {ArticleCount} new entries", feedId, count);
                 return count;

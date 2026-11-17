@@ -13,6 +13,7 @@ public class FeedsModel(AppDatabase database, FeedReader reader) : PageModel
     [BindProperty] public string FeedUrl { get; set; } = "";
     [BindProperty] public int IntervalHours { get; set; } = 6;
     [BindProperty] public bool IocAutoApprove { get; set; }
+    [BindProperty] public string GitHubRepositoryUrl { get; set; } = "";
     [TempData] public string? Notice { get; set; }
     [BindProperty] public string OpmlText { get; set; } = "";
     [BindProperty] public IFormFile? OpmlFile { get; set; }
@@ -53,6 +54,31 @@ public class FeedsModel(AppDatabase database, FeedReader reader) : PageModel
         }
     }
 
+    public IActionResult OnPostAddGitHubRepository()
+    {
+        GitHubRepositoryUrl = GitHubRepositoryUrl.Trim();
+        if (!TryNormalizeGitHubRepository(GitHubRepositoryUrl, out var repositoryUrl))
+        {
+            Notice = "Enter a public GitHub repository URL such as https://github.com/owner/repository.";
+            return RedirectToCurrentView();
+        }
+        if (!new[] { 3, 6, 12, 24 }.Contains(IntervalHours)) IntervalHours = 6;
+        var repository = new Uri(repositoryUrl).AbsolutePath.Trim('/');
+        var title = $"GitHub · {repository}";
+        try
+        {
+            database.Execute("INSERT INTO feeds(title,url,interval_hours,enabled,ioc_auto_approve,source_type,created_utc) VALUES(?,?,?,?,0,'github',?)",
+                title, repositoryUrl, IntervalHours, 1, DateTimeOffset.UtcNow.ToString("O"));
+            Notice = "GitHub repository added. Its first advisory poll starts shortly.";
+            return RedirectToCurrentView();
+        }
+        catch (Exception exception) when (exception.Message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase))
+        {
+            Notice = "That GitHub repository is already on your list.";
+            return RedirectToCurrentView();
+        }
+    }
+
     public async Task<IActionResult> OnPostRefreshAsync(long id, CancellationToken cancellationToken)
     {
         try { var count = await reader.RefreshAsync(id, cancellationToken); Notice = $"Refresh complete. {count} new article{(count == 1 ? "" : "s")} found."; }
@@ -69,13 +95,17 @@ public class FeedsModel(AppDatabase database, FeedReader reader) : PageModel
     public IActionResult OnPostEdit(long id, string title, int intervalHours, string? feedUrl, bool iocAutoApprove)
     {
         title = title.Trim();
-        var current = database.Query("SELECT url FROM feeds WHERE id=?", id).FirstOrDefault();
+        var current = database.Query("SELECT url,source_type FROM feeds WHERE id=?", id).FirstOrDefault();
         var url = string.IsNullOrWhiteSpace(feedUrl) ? current?["url"] : feedUrl.Trim();
-        if (title.Length is < 2 or > 100 || !new[] { 3, 6, 12, 24 }.Contains(intervalHours) || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") || !string.IsNullOrEmpty(uri.UserInfo))
+        var isGitHub = current?.GetValueOrDefault("source_type") == "github";
+        if (isGitHub && TryNormalizeGitHubRepository(url ?? "", out var normalizedRepository)) url = normalizedRepository;
+        Uri? uri = null;
+        var validUrl = isGitHub ? TryNormalizeGitHubRepository(url ?? "", out _) : Uri.TryCreate(url, UriKind.Absolute, out uri) && uri is not null && (uri.Scheme is "http" or "https") && string.IsNullOrEmpty(uri.UserInfo);
+        if (title.Length is < 2 or > 100 || !new[] { 3, 6, 12, 24 }.Contains(intervalHours) || !validUrl)
         {
             Notice = "Feed name, URL, or interval is invalid."; return RedirectToCurrentView();
         }
-        try { database.Execute("UPDATE feeds SET title=?,url=?,interval_hours=?,ioc_auto_approve=?,last_checked_utc=NULL WHERE id=?", title, uri.ToString(), intervalHours, iocAutoApprove, id); }
+        try { database.Execute("UPDATE feeds SET title=?,url=?,interval_hours=?,ioc_auto_approve=?,last_checked_utc=NULL WHERE id=?", title, isGitHub ? url : uri!.ToString(), intervalHours, iocAutoApprove, id); }
         catch (Exception e) when (e.Message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase)) { Notice = "Another source already uses that feed URL."; return RedirectToCurrentView(); }
         database.Execute("UPDATE articles SET feed_title=? WHERE feed_id=?", title, id);
         if (iocAutoApprove)
@@ -153,7 +183,7 @@ public class FeedsModel(AppDatabase database, FeedReader reader) : PageModel
             "status" => $"CASE WHEN f.last_error IS NOT NULL AND length(trim(f.last_error))>0 THEN 0 WHEN f.enabled=1 THEN 1 ELSE 2 END {direction},f.title COLLATE NOCASE ASC,f.id ASC",
             _ => $"f.title COLLATE NOCASE {direction},f.id ASC"
         };
-        Feeds = database.Query($"SELECT f.id,f.title,f.url,f.interval_hours,f.enabled,f.ioc_auto_approve,f.last_checked_utc,f.last_error,(SELECT COUNT(*) FROM articles a WHERE a.feed_id=f.id) AS article_count FROM feeds f {where} ORDER BY {ordering}", args.ToArray());
+        Feeds = database.Query($"SELECT f.id,f.title,f.url,f.source_type,f.interval_hours,f.enabled,f.ioc_auto_approve,f.last_checked_utc,f.last_error,(SELECT COUNT(*) FROM articles a WHERE a.feed_id=f.id) AS article_count FROM feeds f {where} ORDER BY {ordering}", args.ToArray());
     }
 
     private void NormalizeFilters()
@@ -167,4 +197,18 @@ public class FeedsModel(AppDatabase database, FeedReader reader) : PageModel
     }
 
     private IActionResult RedirectToCurrentView() => RedirectToPage("/Feeds", new { search = Search, status = Status, cadence = Cadence, iocApproval = IocApproval, sort = Sort, direction = Direction });
+
+    private static bool TryNormalizeGitHubRepository(string value, out string canonicalUrl)
+    {
+        canonicalUrl = "";
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
+            !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment)) return false;
+        var parts = uri.AbsolutePath.Trim('/').Split('/');
+        if (parts.Length != 2 || !System.Text.RegularExpressions.Regex.IsMatch(parts[0], "^[A-Za-z0-9-]+$") ||
+            !System.Text.RegularExpressions.Regex.IsMatch(parts[1], "^[A-Za-z0-9_.-]+$") || parts[1] is "." or ".." ||
+            parts[1].EndsWith(".git", StringComparison.OrdinalIgnoreCase)) return false;
+        canonicalUrl = $"https://github.com/{parts[0].ToLowerInvariant()}/{parts[1].ToLowerInvariant()}";
+        return true;
+    }
 }

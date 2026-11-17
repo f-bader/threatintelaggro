@@ -30,6 +30,8 @@ builder.Services.AddHttpClient("BriefingAI", client => client.Timeout = TimeSpan
 builder.Services.AddSingleton<BackupManager>();
 builder.Services.AddHostedService<BackupWorker>();
 builder.Services.AddSingleton<SafePublicFetcher>();
+builder.Services.AddHttpClient<GitHubAdvisoryReader>(client => client.Timeout = TimeSpan.FromSeconds(30))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = TimeSpan.FromMinutes(10) });
 builder.Services.AddTransient<FeedReader>();
 builder.Services.AddHttpClient<AnalysisService>(client =>
 {

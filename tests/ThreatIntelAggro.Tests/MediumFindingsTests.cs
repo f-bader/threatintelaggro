@@ -70,6 +70,99 @@ public sealed class MediumFindingsTests
     }
 
     [Fact]
+    public async Task GitHubRepositoryRefreshImportsRecentPublishedAdvisoriesAndIsIdempotent()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        db.Execute("INSERT INTO feeds(title,url,source_type,created_utc) VALUES(?,?, 'github',?)", "GitHub · owner/repo", "https://github.com/owner/repo", DateTimeOffset.UtcNow.ToString("O"));
+        var recent = DateTimeOffset.UtcNow.AddDays(-2).ToString("O");
+        var old = DateTimeOffset.UtcNow.AddDays(-30).ToString("O");
+        var responseBody = $$"""
+            [
+              {"ghsa_id":"GHSA-abcd-1234-efgh","summary":"Recent vulnerability","description":"A long report describes the issue.","severity":"high","cve_id":"CVE-2026-1234","published_at":"{{recent}}","vulnerabilities":[{"package":{"ecosystem":"npm","name":"fixture-package"},"vulnerable_version_range":"< 2.0.0","first_patched_version":"2.0.0"}]},
+              {"ghsa_id":"GHSA-ijkl-1234-mnop","summary":"Old vulnerability","published_at":"{{old}}"}
+            ]
+            """;
+        using var api = new HttpClient(new StaticResponseHandler(request =>
+        {
+            Assert.Equal("api.github.com", request.RequestUri!.Host);
+            Assert.Equal("2026-03-10", request.Headers.GetValues("X-GitHub-Api-Version").Single());
+            Assert.Contains(request.Headers.Accept, x => x.MediaType == "application/vnd.github+json");
+            Assert.Contains("state=published", request.RequestUri.Query);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseBody, Encoding.UTF8, "application/json") };
+        }));
+        using var fetcher = new SafePublicFetcher(new StaticResponseHandler(_ => throw new InvalidOperationException("RSS fetch must not be used for a GitHub source.")));
+        var reader = new FeedReader(fetcher, db, NullLogger<FeedReader>.Instance, new GitHubAdvisoryReader(api));
+
+        Assert.Equal(1, await reader.RefreshAsync(1));
+        db.Execute("UPDATE articles SET is_read=1,ai_status='analyzed',content_text='reviewed evidence' WHERE id=1");
+        Assert.Equal(0, await reader.RefreshAsync(1));
+        var article = db.Query("SELECT title,url,summary,published_utc,is_read,ai_status,content_text FROM articles").Single();
+        Assert.Equal("Recent vulnerability", article["title"]);
+        Assert.Equal("https://github.com/owner/repo/security/advisories/GHSA-abcd-1234-efgh", article["url"]);
+        Assert.Contains("CVE-2026-1234", article["summary"]);
+        Assert.Contains("fixture-package", article["summary"]);
+        Assert.Equal(recent, article["published_utc"]);
+        Assert.Equal("1", article["is_read"]);
+        Assert.Equal("analyzed", article["ai_status"]);
+        Assert.Equal("reviewed evidence", article["content_text"]);
+        Assert.Null(db.Query("SELECT last_error FROM feeds WHERE id=1").Single()["last_error"]);
+    }
+
+    [Fact]
+    public async Task GitHubRepositoryRefreshFollowsPaginationAndSurfacesApiFailure()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        db.Execute("INSERT INTO feeds(title,url,source_type,created_utc) VALUES(?,?, 'github',?)", "GitHub · owner/repo", "https://github.com/owner/repo", DateTimeOffset.UtcNow.ToString("O"));
+        var recent = DateTimeOffset.UtcNow.AddDays(-1).ToString("O");
+        var page = 0;
+        using var api = new HttpClient(new StaticResponseHandler(request =>
+        {
+            page++;
+            if (page == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($"[{{\"ghsa_id\":\"GHSA-abcd-1234-efgh\",\"summary\":\"First\",\"published_at\":\"{recent}\"}}]", Encoding.UTF8, "application/json") };
+                response.Headers.TryAddWithoutValidation("Link", "<https://api.github.com/repos/owner/repo/security-advisories?state=published&page=2>; rel=\"next\"");
+                return response;
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($"[{{\"ghsa_id\":\"GHSA-ijkl-1234-mnop\",\"summary\":\"Second\",\"published_at\":\"{recent}\"}}]", Encoding.UTF8, "application/json") };
+        }));
+        using var fetcher = new SafePublicFetcher(new StaticResponseHandler(_ => throw new InvalidOperationException()));
+        var reader = new FeedReader(fetcher, db, NullLogger<FeedReader>.Instance, new GitHubAdvisoryReader(api));
+
+        Assert.Equal(2, await reader.RefreshAsync(1));
+        Assert.Equal(2, page);
+        Assert.Equal(2, db.ScalarInt("SELECT COUNT(*) FROM articles"));
+
+        using var failedApi = new HttpClient(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StringContent("rate limit exceeded") }));
+        var failedReader = new FeedReader(fetcher, db, NullLogger<FeedReader>.Instance, new GitHubAdvisoryReader(failedApi));
+        await Assert.ThrowsAsync<HttpRequestException>(() => failedReader.RefreshAsync(1));
+        Assert.Contains("HTTP 403", db.Query("SELECT last_error FROM feeds WHERE id=1").Single()["last_error"]);
+    }
+
+    [Fact]
+    public void GitHubRepositorySourceCanBeAddedAndExistingSourcesDefaultToRss()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var page = new FeedsModel(db, null!) { GitHubRepositoryUrl = "https://github.com/Example/secure-repo/", IntervalHours = 12 };
+
+        var result = Assert.IsType<RedirectToPageResult>(page.OnPostAddGitHubRepository());
+
+        Assert.Equal("/Feeds", result.PageName);
+        var source = db.Query("SELECT title,url,source_type,interval_hours,ioc_auto_approve FROM feeds").Single();
+        Assert.Equal("GitHub · example/secure-repo", source["title"]);
+        Assert.Equal("https://github.com/example/secure-repo", source["url"]);
+        Assert.Equal("github", source["source_type"]);
+        Assert.Equal("12", source["interval_hours"]);
+        Assert.Equal("0", source["ioc_auto_approve"]);
+
+        db.Execute("INSERT INTO feeds(title,url,created_utc) VALUES(?,?,?)", "Legacy RSS", "https://example.test/feed", DateTimeOffset.UtcNow.ToString("O"));
+        Assert.Equal("rss", db.Query("SELECT source_type FROM feeds WHERE title='Legacy RSS'").Single()["source_type"]);
+    }
+
+    [Fact]
     public void FeedListingFiltersAndSortsEveryDataColumnWithStableNullHandling()
     {
         using var fixture = DatabaseFixture.Create();
