@@ -49,7 +49,7 @@
          @if (group.Ignored) { <form method="post" asp-page-handler="IgnoreGroup"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="ignored" value="false"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><button class="small-action" type="submit">RESTORE GROUP</button></form> }
          else { <form method="post" asp-page-handler="IgnoreGroup"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="ignored" value="true"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><button class="small-action" type="submit">IGNORE GROUP</button></form> }
        </div>
-       <details class="article-group-members"><summary>VIEW @display.MatchingMembers.Count MATCHING REPORT@(display.MatchingMembers.Count == 1 ? "" : "S") <span>· Article review state stays separate</span></summary>
+       <details class="article-group-members" open><summary>VIEW @display.MatchingMembers.Count MATCHING REPORT@(display.MatchingMembers.Count == 1 ? "" : "S") <span>· Article review state stays separate</span></summary>
          @foreach (var member in display.MatchingMembers)
          {
            var dateText = DateTimeOffset.TryParse(member["published_utc"] ?? member["first_seen_utc"], out var published) ? published.ToLocalTime().ToString("dd MMM yyyy · HH:mm") : "Date unknown";

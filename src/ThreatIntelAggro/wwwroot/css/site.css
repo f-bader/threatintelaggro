@@ -390,7 +390,8 @@ h2 { margin: 3px 0 0; color: #dbe2e9; font: 700 16px var(--sans); letter-spacing
 .group-rename input { width: 100%; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid #34404c; background: #0b1016; color: var(--text); font: 10px var(--mono); }
 .article-group-members > summary { padding: 9px 12px; color: #a8dbe2; font: 9px var(--mono); letter-spacing: .5px; cursor: pointer; }
 .article-group-members > summary span { color: #7f8c98; letter-spacing: 0; }
-.group-member-row { display: grid; grid-template-columns: 30px minmax(0,1fr) auto; align-items: start; gap: 9px; padding: 10px 12px; border-top: 1px solid #232d37; }
+.article-group-members { counter-reset: article; }
+.group-member-row { display: grid; grid-template-columns: 30px minmax(0,1fr) auto; align-items: start; gap: 9px; padding: 10px 12px; border-top: 1px solid #232d37; counter-increment: article; }
 .group-member-content { min-width: 0; }
 .group-member-content h4 { margin: 4px 0 3px; color: #dce3eb; font: 600 12px/1.4 var(--sans); overflow-wrap: anywhere; }
 .group-member-content h4 a { text-decoration: none; }
