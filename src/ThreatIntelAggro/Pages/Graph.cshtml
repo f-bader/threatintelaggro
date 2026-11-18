@@ -1,0 +1,242 @@
+@page
+@model GraphModel
+@{
+    ViewData["Title"] = "Graph";
+    var first = Model.Graph.Nodes.FirstOrDefault(node => node.Id == Model.FirstSelectedId) ?? Model.Graph.Nodes.FirstOrDefault();
+}
+<div class="page-heading graph-heading">
+  <div><div class="eyebrow"><span class="live-dot"></span>ENTITY RELATIONSHIPS / GRAPH EXPLORER</div><h1>Threat intelligence graph</h1><p class="subhead">Search the evidence network or load recent Time-Critical Threat reporting.</p></div>
+  <div class="graph-heading-note">EVIDENCE-CENTERED VIEW<br />SEARCH EXPANSION: 1 HOP</div>
+</div>
+
+<form method="get" asp-page="/Graph" class="graph-filter-form" id="graph-filter-form">
+  <input type="hidden" name="ScopeInput" value="@Model.Scope" />
+  <input type="hidden" name="TypesSpecified" value="true" />
+  <section class="graph-search-panel panel" aria-label="Graph search">
+    <div class="graph-search-field"><label for="graph-search">SEARCH ENTITIES, REPORTS, OR IOCs</label><input id="graph-search" type="search" name="SearchInput" value="@Model.Search" placeholder="Vendor, threat actor, domain, article title" /></div>
+    <div class="graph-filter-field"><label for="graph-days">TIME WINDOW</label><select id="graph-days" name="DaysInput" data-auto-submit><option value="7" selected="@(Model.Days == 7)">Last 7 days</option><option value="30" selected="@(Model.Days == 30)">Last 30 days</option><option value="90" selected="@(Model.Days == 90)">Last 90 days</option><option value="365" selected="@(Model.Days == 365)">Last 12 months</option><option value="0" selected="@(Model.Days == 0)">All time</option></select></div>
+    <div class="graph-filter-field"><label for="graph-category">CATEGORY</label><select id="graph-category" name="CategoryInput" data-auto-submit><option value="">All categories</option>@foreach (var category in Model.Categories) { <option value="@category" selected="@(Model.Category == category)">@category</option> }</select></div>
+    <div class="graph-filter-field"><label for="graph-source">SOURCE</label><select id="graph-source" name="SourceInput" data-auto-submit><option value="">All sources</option>@foreach (var source in Model.Sources) { <option value="@source" selected="@(Model.Source == source)">@source</option> }</select></div>
+    <div class="graph-filter-field"><label for="graph-ioc-status">IOC STATUS</label><select id="graph-ioc-status" name="IocStatusInput" data-auto-submit><option value="all" selected="@(Model.IocStatus is null)">All statuses</option><option value="malicious" selected="@(Model.IocStatus == "malicious")">Malicious</option><option value="suspicious" selected="@(Model.IocStatus == "suspicious")">Suspicious</option><option value="benign_context" selected="@(Model.IocStatus == "benign_context")">Benign context</option><option value="unknown" selected="@(Model.IocStatus == "unknown")">Unknown</option></select></div>
+    <div class="graph-search-actions"><button class="button button-primary" type="submit" name="ScopeOverride" value="search">SEARCH</button><button class="button button-secondary" type="submit" name="ScopeOverride" value="all">SHOW ENTIRE GRAPH</button><a class="button button-quiet" asp-page="/Graph">RESET</a></div>
+  </section>
+
+  <section class="panel graph-types-panel" aria-label="Entity types">
+    <div class="graph-types-title">AVAILABLE TYPES</div>
+    <div class="graph-type-options">@foreach (var type in GraphModel.AvailableTypes) { <label class="graph-type-option"><input type="checkbox" name="TypesInput" value="@type.Key" checked="@(Model.SelectedTypes.Contains(type.Key))" data-auto-submit /><span>@type.Label</span></label> }</div>
+  </section>
+
+  <section class="graph-scope-panel panel">
+    <div class="graph-scope-copy"><div class="eyebrow">START WITH A CURATED CATEGORY</div><p>Load recent articles classified as Time-Critical Threat and their directly connected evidence.</p></div>
+    <button class="button button-primary" type="submit" name="ScopeOverride" value="recent">POPULATE RECENT “TIME-CRITICAL THREAT”</button>
+  </section>
+
+  @if (Model.Scope.Length == 0)
+  {
+    <section class="graph-empty panel" aria-live="polite">
+      <div class="graph-empty-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <h2>Graph is empty</h2><p>Search for an entity, report, or IOC, or load the recent Time-Critical Threat category.</p>
+      <div class="graph-empty-note">ONE-HOP NEIGHBORHOOD · EVIDENCE-BACKED LINKS · CO-MENTIONS OPTIONAL</div>
+    </section>
+  }
+  else if (Model.Graph.Nodes.Count == 0)
+  {
+    <section class="graph-empty panel" aria-live="polite"><h2>No matching evidence</h2><p>Try another search or widen the time window and filters.</p><a class="button button-secondary" asp-page="/Graph">CLEAR GRAPH FILTERS</a></section>
+  }
+  else
+  {
+    <section class="panel graph-results-panel" aria-label="Graph results">
+      <div class="graph-results-head"><div><div class="eyebrow">@(Model.Scope == "search" ? "SEARCH RESULT / 1-HOP NEIGHBORHOOD" : Model.Scope == "all" ? "FULL DATASET / ALL MATCHING EVIDENCE" : "TIME-CRITICAL THREATS / EVIDENCE CLUSTERS")</div><h2>@Model.Graph.ArticleCount ARTICLES <span class="count-chip">@Model.Graph.Nodes.Count NODES · @Model.Graph.Edges.Count LINKS</span></h2></div>
+        <div class="graph-result-actions"><label class="graph-co-mention"><input type="checkbox" name="CoMentionsInput" value="true" checked="@Model.CoMentions" data-auto-submit /> INCLUDE CO-MENTION LINKS</label><button class="button button-secondary graph-export-image" type="button">EXPORT IMAGE</button><button class="button button-secondary" type="submit" asp-page-handler="ExportData">EXPORT DATA</button></div>
+      </div>
+      <div class="graph-type-filter-row"><span>VISIBLE NODE TYPES</span>@foreach (var type in GraphModel.AvailableTypes.Where(item => Model.SelectedTypes.Contains(item.Key))) { <span class="graph-kind-chip">@type.Label</span> }</div>
+      <div class="graph-workspace">
+        <div class="graph-canvas-wrap">
+          <div class="graph-canvas-viewport" role="region" aria-label="Scrollable graph canvas" tabindex="0">
+          <svg class="graph-svg" data-graph-svg viewBox="0 0 @Model.SvgWidth @Model.SvgHeight" width="@Model.SvgWidth" height="@Model.SvgHeight" role="img" aria-label="Threat intelligence entity graph with @Model.Graph.Nodes.Count nodes and @Model.Graph.Edges.Count evidence links">
+            <title>Threat intelligence evidence graph</title>
+            <desc>Nodes are grouped by entity type. Drag a node to reposition it, or drag empty canvas space to pan the graph. Solid lines represent direct evidence links; dashed lines represent optional co-mentions in the same article.</desc>
+            <defs><pattern id="graph-grid" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#35414d" /></pattern></defs>
+            <rect data-graph-background x="0" y="0" width="@Model.SvgWidth" height="@Model.SvgHeight" fill="url(#graph-grid)" />
+            <g class="graph-edges">@foreach (var edge in Model.Graph.Edges) { var sourcePos = Model.PositionFor(edge.Source); var targetPos = Model.PositionFor(edge.Target); if (sourcePos is not null && targetPos is not null) { var coMention = edge.Kind == "co-mention"; <g class="graph-edge @(coMention ? "co-mention-edge" : "")" data-edge-from="@edge.Source" data-edge-to="@edge.Target" data-edge-kind="@edge.Kind" aria-label="@($"{sourcePos.ShortLabel} {edge.Label} {targetPos.ShortLabel}; evidence: {edge.EvidenceTitle}")"><title>@edge.Label · evidence: @edge.EvidenceTitle</title><line x1="@(sourcePos.X + 24)" y1="@sourcePos.Y" x2="@(targetPos.X - 24)" y2="@targetPos.Y" /></g> } }</g>
+            <g class="graph-nodes">@foreach (var position in Model.Positions) { var node = position.Node; <g class="graph-node type-@node.Type @(position.Selected ? "selected" : "")" data-graph-node data-node-id="@node.Id" data-node-type-key="@node.Type" data-node-x="@position.X" data-node-y="@position.Y" data-node-label="@node.Label" data-node-type="@node.TypeLabel" data-node-details="@node.Details" data-node-category="@node.Category" data-node-source="@node.Source" data-node-status="@node.IocStatus" role="button" aria-label="@($"{node.TypeLabel}: {node.Label}")" tabindex="0"><title>@node.Label · @node.TypeLabel</title><circle cx="@position.X" cy="@position.Y" r="23" /><text x="@position.X" y="@(position.Y + 39)" class="graph-node-label">@position.ShortLabel</text><text x="@position.X" y="@(position.Y + 52)" class="graph-node-kind">@node.TypeLabel.ToUpperInvariant()</text></g> }</g>
+          </svg>
+          </div>
+          <div class="graph-canvas-tools"><button type="button" aria-label="Zoom in" data-graph-zoom="in">+</button><button type="button" aria-label="Zoom out" data-graph-zoom="out">−</button><button type="button" aria-label="Fit graph" data-graph-fit>FIT</button></div>
+        </div>
+        <aside class="graph-inspector" aria-label="Selected node details" aria-live="polite">
+          <div class="eyebrow">NODE INSPECTOR / READ ONLY</div>
+          <h3 data-inspector-label>@(first?.Label ?? "Select a node")</h3><div class="graph-inspector-kind" data-inspector-type>@(first?.TypeLabel.ToUpperInvariant() ?? "")</div>
+          <div class="graph-inspector-meta"><span data-inspector-category>@first?.Category</span><span data-inspector-source>@first?.Source</span><span data-inspector-status>@(first?.IocStatus is null ? "" : $"IOC · {first.IocStatus}")</span></div>
+          <p class="graph-inspector-details" data-inspector-details>@(first?.Details ?? "Choose a graph node to see its details and supporting evidence.")</p>
+          <div class="graph-inspector-section"><div class="eyebrow">SUPPORTING LINKS</div><div class="graph-evidence-list" data-inspector-evidence>
+            @if (first is not null) { foreach (var edge in Model.Graph.Edges.Where(edge => edge.Source == first.Id || edge.Target == first.Id).Take(12)) { <div class="graph-evidence-item"><span class="graph-evidence-mark"></span><div><strong>@edge.Label</strong><small>@edge.EvidenceTitle · @edge.EvidenceCount evidence record@(edge.EvidenceCount == 1 ? "" : "s")</small></div></div> } }
+          </div></div>
+          <div class="graph-provenance-note">DIRECT LINKS SHOW SOURCE ARTICLE EVIDENCE. DASHED LINKS ARE CO-MENTIONS ONLY; THEY DO NOT ASSERT CAUSATION OR ATTRIBUTION.</div>
+        </aside>
+      </div>
+      <div class="graph-legend"><span><i class="graph-legend-node"></i>NODE COLOR IS PAIRED WITH TYPE LABEL</span><span><i class="graph-legend-edge"></i>DIRECT EVIDENCE LINK</span><span><i class="graph-legend-edge dashed"></i>OPTIONAL CO-MENTION</span><span class="graph-count-summary">@Model.Graph.Nodes.Count NODES / @Model.Graph.Edges.Count LINKS</span></div>
+    </section>
+  }
+</form>
+
+@section Scripts {
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
+(() => {
+  const form = document.getElementById('graph-filter-form');
+  const svg = document.querySelector('[data-graph-svg]');
+  if (!form || !svg) return;
+  const inspectorLabel = document.querySelector('[data-inspector-label]');
+  const inspectorType = document.querySelector('[data-inspector-type]');
+  const inspectorDetails = document.querySelector('[data-inspector-details]');
+  const evidenceList = document.querySelector('[data-inspector-evidence]');
+  const nodes = [...svg.querySelectorAll('[data-graph-node]')];
+  const edges = [...svg.querySelectorAll('[data-edge-from]')];
+  const canvasViewport = document.querySelector('.graph-canvas-viewport');
+  const graphBackground = svg.querySelector('[data-graph-background]');
+  function selectNode(node) {
+    nodes.forEach(item => item.classList.toggle('selected', item === node));
+    inspectorLabel.textContent = node.dataset.nodeLabel || '';
+    inspectorType.textContent = (node.dataset.nodeType || '').toUpperCase();
+    inspectorDetails.textContent = node.dataset.nodeDetails || 'No additional entity description is available.';
+    const meta = [node.dataset.nodeCategory, node.dataset.nodeSource, node.dataset.nodeStatus ? 'IOC · ' + node.dataset.nodeStatus : ''].filter(Boolean);
+    document.querySelector('[data-inspector-category]').textContent = meta[0] || '';
+    document.querySelector('[data-inspector-source]').textContent = meta[1] || '';
+    document.querySelector('[data-inspector-status]').textContent = meta[2] || '';
+    evidenceList.replaceChildren();
+    edges.filter(edge => edge.dataset.edgeFrom === node.dataset.nodeId || edge.dataset.edgeTo === node.dataset.nodeId).slice(0, 12).forEach(edge => {
+      const title = edge.querySelector('title')?.textContent || '';
+      const row = document.createElement('div'); row.className = 'graph-evidence-item';
+      const mark = document.createElement('span'); mark.className = 'graph-evidence-mark';
+      const content = document.createElement('div'); const strong = document.createElement('strong'); strong.textContent = title.split(' · evidence:')[0];
+      const small = document.createElement('small'); small.textContent = title.includes(' · evidence:') ? 'Evidence: ' + title.split(' · evidence:')[1] : title;
+      content.append(strong, small); row.append(mark, content); evidenceList.append(row);
+    });
+  }
+  nodes.forEach(node => {
+    node.addEventListener('click', () => selectNode(node));
+    node.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectNode(node); } });
+  });
+  const nodeById = new Map(nodes.map(node => [node.dataset.nodeId, node]));
+  const readViewBox = () => {
+    const values = (svg.getAttribute('viewBox') || `0 0 ${svg.getAttribute('width')} ${svg.getAttribute('height')}`).trim().split(/[\s,]+/).map(Number);
+    return { x: values[0] || 0, y: values[1] || 0, width: values[2] || Number(svg.getAttribute('width')), height: values[3] || Number(svg.getAttribute('height')) };
+  };
+  const setViewBox = view => {
+    svg.setAttribute('viewBox', `${view.x} ${view.y} ${view.width} ${view.height}`);
+    graphBackground?.setAttribute('x', String(view.x));
+    graphBackground?.setAttribute('y', String(view.y));
+    graphBackground?.setAttribute('width', String(view.width));
+    graphBackground?.setAttribute('height', String(view.height));
+  };
+  const pointerToSvg = (clientX, clientY) => {
+    const rect = svg.getBoundingClientRect(); const view = readViewBox();
+    return { x: view.x + (clientX - rect.left) / Math.max(1, rect.width) * view.width, y: view.y + (clientY - rect.top) / Math.max(1, rect.height) * view.height };
+  };
+  function setNodePosition(node, x, y) {
+    node.dataset.nodeX = String(x); node.dataset.nodeY = String(y);
+    node.querySelector('circle')?.setAttribute('cx', String(x));
+    node.querySelector('circle')?.setAttribute('cy', String(y));
+    node.querySelectorAll('text').forEach(text => {
+      text.setAttribute('x', String(x));
+      text.setAttribute('y', String(y + (text.classList.contains('graph-node-label') ? 39 : 52)));
+    });
+    edges.filter(edge => edge.dataset.edgeFrom === node.dataset.nodeId || edge.dataset.edgeTo === node.dataset.nodeId).forEach(edge => {
+      const source = nodeById.get(edge.dataset.edgeFrom); const target = nodeById.get(edge.dataset.edgeTo);
+      if (!source || !target) return;
+      const sx = Number(source.dataset.nodeX); const sy = Number(source.dataset.nodeY);
+      const tx = Number(target.dataset.nodeX); const ty = Number(target.dataset.nodeY);
+      const dx = tx - sx; const dy = ty - sy; const length = Math.hypot(dx, dy) || 1;
+      const line = edge.querySelector('line');
+      line?.setAttribute('x1', String(sx + dx / length * 24));
+      line?.setAttribute('y1', String(sy + dy / length * 24));
+      line?.setAttribute('x2', String(tx - dx / length * 24));
+      line?.setAttribute('y2', String(ty - dy / length * 24));
+    });
+  }
+  let drag = null;
+  let pan = null;
+  nodes.forEach(node => {
+    node.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      const point = pointerToSvg(event.clientX, event.clientY);
+      drag = { node, pointerId: event.pointerId, pointerX: point.x, pointerY: point.y, nodeX: Number(node.dataset.nodeX), nodeY: Number(node.dataset.nodeY) };
+      node.classList.add('dragging'); svg.setPointerCapture?.(event.pointerId); event.preventDefault();
+    });
+  });
+  svg.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || event.target.closest?.('[data-graph-node]')) return;
+    const rect = svg.getBoundingClientRect();
+    const view = readViewBox();
+    pan = { pointerId: event.pointerId, pointerX: event.clientX, pointerY: event.clientY, rect, view };
+    canvasViewport.classList.add('panning');
+    svg.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  svg.addEventListener('pointermove', event => {
+    if (drag && drag.pointerId === event.pointerId) {
+      const point = pointerToSvg(event.clientX, event.clientY);
+      setNodePosition(drag.node, drag.nodeX + point.x - drag.pointerX, drag.nodeY + point.y - drag.pointerY);
+      return;
+    }
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - pan.pointerX;
+    const deltaY = event.clientY - pan.pointerY;
+    const viewX = pan.view.x - deltaX / Math.max(1, pan.rect.width) * pan.view.width;
+    const viewY = pan.view.y - deltaY / Math.max(1, pan.rect.height) * pan.view.height;
+    setViewBox({ x: viewX, y: viewY, width: pan.view.width, height: pan.view.height });
+  });
+  const finishDrag = event => {
+    if (drag && drag.pointerId === event.pointerId) { drag.node.classList.remove('dragging'); drag = null; }
+    if (pan && pan.pointerId === event.pointerId) { pan = null; canvasViewport.classList.remove('panning'); }
+  };
+  svg.addEventListener('pointerup', finishDrag);
+  svg.addEventListener('pointercancel', finishDrag);
+  const coToggle = form.querySelector('[name="CoMentionsInput"]');
+  svg.querySelectorAll('.co-mention-edge').forEach(edge => edge.style.display = coToggle?.checked ? '' : 'none');
+  let baseCanvasWidth = Number(svg.getAttribute('width'));
+  let baseCanvasHeight = Number(svg.getAttribute('height'));
+  let zoomLevel = 1;
+  let fitBounds = null;
+  function applyCanvasZoom() {
+    svg.style.width = `${Math.max(1, baseCanvasWidth * zoomLevel)}px`;
+    svg.style.height = `${Math.max(1, baseCanvasHeight * zoomLevel)}px`;
+  }
+  form.querySelector('[data-graph-zoom="in"]')?.addEventListener('click', () => { zoomLevel = Math.min(5, zoomLevel * 1.25); applyCanvasZoom(); });
+  form.querySelector('[data-graph-zoom="out"]')?.addEventListener('click', () => { zoomLevel = Math.max(.2, zoomLevel / 1.25); applyCanvasZoom(); });
+  form.querySelector('[data-graph-fit]')?.addEventListener('click', () => {
+    if (!canvasViewport || nodes.length === 0) return;
+    const padding = 42;
+    const bounds = nodes.map(node => {
+      const x = Number(node.dataset.nodeX); const y = Number(node.dataset.nodeY);
+      const labelWidth = Math.max(46, (node.querySelector('.graph-node-label')?.textContent.length || 0) * 5.5);
+      return { left: x - labelWidth / 2, right: x + labelWidth / 2, top: y - 24, bottom: y + 57 };
+    });
+    const left = Math.min(...bounds.map(box => box.left)) - padding;
+    const top = Math.min(...bounds.map(box => box.top)) - padding;
+    const right = Math.max(...bounds.map(box => box.right)) + padding;
+    const bottom = Math.max(...bounds.map(box => box.bottom)) + padding;
+    setViewBox({ x: left, y: top, width: right - left, height: bottom - top });
+    fitBounds = { x: left, y: top, width: right - left, height: bottom - top };
+    baseCanvasWidth = Math.max(1, canvasViewport.clientWidth);
+    baseCanvasHeight = Math.max(1, canvasViewport.clientHeight);
+    zoomLevel = 1; applyCanvasZoom();
+    canvasViewport.scrollLeft = 0; canvasViewport.scrollTop = 0;
+  });
+  window.addEventListener('resize', () => {
+    if (!fitBounds || !canvasViewport) return;
+    baseCanvasWidth = Math.max(1, canvasViewport.clientWidth);
+    baseCanvasHeight = Math.max(1, canvasViewport.clientHeight);
+    applyCanvasZoom();
+  });
+  form.querySelector('.graph-export-image')?.addEventListener('click', () => {
+    const clone = svg.cloneNode(true); clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+    const exportedNodeColors = nodes.map(node => { const colors = getComputedStyle(node); return `.graph-node.type-${node.dataset.nodeTypeKey} circle{fill:${colors.getPropertyValue('--graph-node-fill').trim()};stroke:${colors.getPropertyValue('--graph-node-stroke').trim()}}`; }).join('');
+    style.textContent = '.graph-edges line{stroke:#4b6672;stroke-width:1.2}.graph-edge.co-mention-edge line{stroke:#71808e;stroke-dasharray:4 4}.graph-edge text{fill:#aab6c0;font:9px monospace}.graph-node circle{fill:#13232a;stroke:#57c5d9;stroke-width:1.5}.graph-node text{fill:#d9e0e8;font:10px monospace;text-anchor:middle}.graph-node .graph-node-kind{fill:#81909e;font-size:8px}' + exportedNodeColors + '.graph-node.selected circle{stroke:#dff7fa;stroke-width:2.4}';
+    clone.prepend(style); const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' });
+    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'threat-intel-graph.svg'; link.click(); URL.revokeObjectURL(link.href);
+  });
+})();
+</script>
+}
