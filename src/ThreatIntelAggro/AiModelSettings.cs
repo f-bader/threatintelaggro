@@ -56,10 +56,10 @@ public sealed class AiModelSettingsService(AppDatabase database, IConfiguration 
 
             var legacy = new AiModelSettings(
                 Model: configuration["OpenAI:Model"] ?? "gpt-6-luna",
-                Effort: configuration["OpenAI:ReasoningEffort"] ?? "high",
+                Effort: configuration["OpenAI:ReasoningEffort"] ?? "medium",
                 ResearchEffort: configuration["OpenAI:ResearchEffort"] ?? "low",
-                ArticleEffort: configuration["OpenAI:AnalysisEffort"] ?? "high",
-                DetectionEffort: configuration["OpenAI:AnalysisEffort"] ?? "high",
+                ArticleEffort: configuration["OpenAI:AnalysisEffort"] ?? "medium",
+                DetectionEffort: configuration["OpenAI:AnalysisEffort"] ?? "medium",
                 RepairEffort: configuration["OpenAI:RepairEffort"] ?? "low",
                 Revision: 1);
             SaveCore(legacy);

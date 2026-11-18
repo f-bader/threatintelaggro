@@ -23,6 +23,9 @@ builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(P
 builder.Services.AddSingleton<AppDatabase>();
 builder.Services.AddSingleton<IocCountCache>();
 builder.Services.AddSingleton<AiModelSettingsService>();
+builder.Services.AddSingleton<ArticleGroupingService>();
+builder.Services.AddSingleton<OpenAiArticleGroupNameGenerator>();
+builder.Services.AddHttpClient("ArticleGroupNames", client => client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddSingleton<IBriefingWriter, OpenAiBriefingWriter>();
 builder.Services.AddScoped<BriefingService>();
 builder.Services.AddHostedService<BriefingScheduler>();

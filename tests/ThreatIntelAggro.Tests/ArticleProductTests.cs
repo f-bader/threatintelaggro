@@ -10,7 +10,7 @@ namespace ThreatIntelAggro.Tests;
 public sealed class ArticleProductTests
 {
     [Fact]
-    public void Product_filter_uses_saved_analysis_and_exposes_only_current_product_facets()
+    public async Task Product_filter_uses_saved_analysis_and_exposes_only_current_product_facets()
     {
         using var fixture = DatabaseFixture.Create();
         var db = fixture.Database;
@@ -18,7 +18,7 @@ public sealed class ArticleProductTests
         Insert(db, "Without product", "Other Router");
         var page = new InboxModel(db, null!) { Product = "Acme Gateway", State = "all" };
 
-        page.OnGet();
+        await page.OnGetAsync();
 
         Assert.Contains("Acme Gateway", page.Products);
         Assert.Contains("Other Router", page.Products);
@@ -46,7 +46,7 @@ public sealed class ArticleProductTests
     [InlineData("vendor", "Acme")]
     [InlineData("industry", "Healthcare")]
     [InlineData("product", "Acme Gateway")]
-    public void Followed_filter_matches_enabled_vendor_industry_and_product_follows(string kind, string name)
+    public async Task Followed_filter_matches_enabled_vendor_industry_and_product_follows(string kind, string name)
     {
         using var fixture = DatabaseFixture.Create();
         var db = fixture.Database;
@@ -58,14 +58,14 @@ public sealed class ArticleProductTests
         db.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES(?,?,1,0)", kind, name);
         var page = new InboxModel(db, null!) { FollowedOnly = true, State = "all" };
 
-        page.OnGet();
+        await page.OnGetAsync();
 
         Assert.Single(page.Articles);
         Assert.Equal("Followed match", page.Articles[0]["title"]);
     }
 
     [Fact]
-    public void Followed_filter_excludes_articles_when_all_follows_are_disabled()
+    public async Task Followed_filter_excludes_articles_when_all_follows_are_disabled()
     {
         using var fixture = DatabaseFixture.Create();
         var db = fixture.Database;
@@ -73,7 +73,7 @@ public sealed class ArticleProductTests
         db.Execute("INSERT INTO briefing_follows(kind,name,is_enabled,is_custom) VALUES('product','Acme Gateway',0,0)");
         var page = new InboxModel(db, null!) { FollowedOnly = true, State = "all" };
 
-        page.OnGet();
+        await page.OnGetAsync();
 
         Assert.Empty(page.Articles);
     }
