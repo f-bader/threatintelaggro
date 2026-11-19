@@ -220,14 +220,38 @@ public sealed class BriefingService(AppDatabase database, IBriefingWriter writer
     public static string ResolvePrompt(string? saved) => string.IsNullOrWhiteSpace(saved) ? DefaultPrompt : saved;
     public static string HashFeedId(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     public bool HasInProgressAnalysis(DateTimeOffset end) => database.ScalarInt("SELECT COUNT(*) FROM articles WHERE ai_status IN ('pending','analyzing') AND COALESCE(published_utc,first_seen_utc)>=? AND COALESCE(published_utc,first_seen_utc)<?", end.AddDays(-1).ToString("O"), end.ToString("O")) > 0;
-    public IReadOnlyList<string> Available(string kind)
+    public IReadOnlyList<string> Available(string kind) => AvailableByKind(kind)[kind];
+
+    public IReadOnlyDictionary<string, string[]> AvailableByKind(params string[] kinds)
     {
-        var field = kind switch { "vendor" => "vendors", "industry" => "industries", "product" => "products", _ => throw new ArgumentOutOfRangeException(nameof(kind)) };
-        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var fields = kinds.ToDictionary(kind => kind, kind => kind switch
+        {
+            "vendor" => "vendors",
+            "industry" => "industries",
+            "product" => "products",
+            _ => throw new ArgumentOutOfRangeException(nameof(kinds))
+        });
+        var values = kinds.ToDictionary(kind => kind, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         foreach (var row in database.Query("SELECT analysis_json FROM articles WHERE ai_status='analyzed' AND analysis_json IS NOT NULL"))
-            try { using var doc = JsonDocument.Parse(row["analysis_json"]!); foreach (var item in doc.RootElement.GetProperty(field).EnumerateArray()) { var name = item.TryGetProperty("name", out var n) ? n.GetString() : null; if (!string.IsNullOrWhiteSpace(name)) values.Add(name.Trim()); } } catch (Exception e) when (e is JsonException or InvalidOperationException or KeyNotFoundException) { }
-        return values.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(row["analysis_json"]!);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+                foreach (var (kind, field) in fields)
+                {
+                    if (!doc.RootElement.TryGetProperty(field, out var entries) || entries.ValueKind != JsonValueKind.Array) continue;
+                    foreach (var item in entries.EnumerateArray())
+                        if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("name", out var name)
+                            && name.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(name.GetString()))
+                            values[kind].Add(name.GetString()!.Trim());
+                }
+            }
+            catch (JsonException) { }
+        }
+        return values.ToDictionary(pair => pair.Key, pair => pair.Value.Order(StringComparer.OrdinalIgnoreCase).ToArray());
     }
+
     public async Task<int> GenerateAsync(DateTimeOffset end, CancellationToken ct = default)
     {
         end = end.ToUniversalTime(); var start = end.AddDays(-1);

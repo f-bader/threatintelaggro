@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace ThreatIntelAggro.Pages;
 
-public sealed class IndexModel(BriefingService briefings) : PageModel
+public sealed class IndexModel(BriefingService briefings, ManualJobs jobs) : PageModel
 {
     public Dictionary<string, string?>? Latest { get; private set; }
     public IReadOnlyList<Dictionary<string, string?>> Archive { get; private set; } = [];
@@ -21,10 +21,12 @@ public sealed class IndexModel(BriefingService briefings) : PageModel
             Iocs = briefings.GetIocs(Latest);
         }
     }
-    public async Task<IActionResult> OnPostGenerateAsync(CancellationToken cancellationToken)
+    public ManualJobStatus? GenerationStatus => jobs.Status(ManualJobs.BriefingKey);
+
+    public IActionResult OnPostGenerate()
     {
-        try { var count = await briefings.GenerateAsync(DateTimeOffset.UtcNow, cancellationToken); Notice = count == 0 ? "No applicable analyzed articles were found in the last 24 hours; no briefing was created." : $"Briefing generated from {count} applicable article(s)."; }
-        catch (Exception ex) when (ex is not OperationCanceledException) { Notice = $"Briefing generation failed: {ex.Message}"; }
+        var status = jobs.EnqueueBriefing();
+        if (status.State == "failed") Notice = status.Message;
         return RedirectToPage();
     }
     public IActionResult OnGetMarkdown(long id) => Export(id, false);

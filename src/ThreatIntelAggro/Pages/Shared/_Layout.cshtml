@@ -28,13 +28,13 @@
   </header>
   <main class="console-main">
     <nav class="console-tabs" aria-label="Workspace">
-      <a class="console-tab @(ViewData["Title"]?.ToString() == "Intel Inbox" ? "active" : "")" asp-page="/Inbox"><span class="tab-label">INBOX</span><span class="tab-count">@unreadCount</span></a>
+      <a class="console-tab @(ViewData["Title"]?.ToString() == "Intel Inbox" ? "active" : "")" asp-page="/Inbox"><span class="tab-label">INBOX</span><span class="tab-count" data-workspace-count="inbox">@unreadCount</span></a>
       <a class="console-tab @(ViewData["Title"]?.ToString() is "Briefings" or "Briefing Archive" ? "active" : "")" asp-page="/Index"><span class="tab-label">BRIEFINGS</span></a>
       <a class="console-tab @(ViewData["Title"]?.ToString() == "Insights" ? "active" : "")" asp-page="/Insights"><span class="tab-label">INSIGHTS</span></a>
       <a class="console-tab @(ViewData["Title"]?.ToString() == "Graph" ? "active" : "")" asp-page="/Graph"><span class="tab-label">GRAPH</span></a>
-      <a class="console-tab @(ViewData["Title"]?.ToString() == "Detection Ideas" ? "active" : "")" asp-page="/Detections"><span class="tab-label desktop-only">DETECTION IDEAS</span><span class="tab-label mobile-only">DETECTIONS</span><span class="tab-count">@draftCount</span></a>
-      <a class="console-tab @(ViewData["Title"]?.ToString() == "Feeds" ? "active" : "")" asp-page="/Feeds"><span class="tab-label">SOURCES</span><span class="tab-count">@feedCount</span></a>
-      <a class="console-tab compact-tab @(ViewData["Title"]?.ToString() == "IOCs" ? "active" : "")" asp-page="/Iocs"><span class="tab-label">IOCS</span><span class="tab-count">@iocCount</span></a>
+      <a class="console-tab @(ViewData["Title"]?.ToString() == "Detection Ideas" ? "active" : "")" asp-page="/Detections"><span class="tab-label desktop-only">DETECTION IDEAS</span><span class="tab-label mobile-only">DETECTIONS</span><span class="tab-count" data-workspace-count="detections">@draftCount</span></a>
+      <a class="console-tab @(ViewData["Title"]?.ToString() == "Feeds" ? "active" : "")" asp-page="/Feeds"><span class="tab-label">SOURCES</span><span class="tab-count" data-workspace-count="feeds">@feedCount</span></a>
+      <a class="console-tab compact-tab @(ViewData["Title"]?.ToString() == "IOCs" ? "active" : "")" asp-page="/Iocs"><span class="tab-label">IOCS</span><span class="tab-count" data-workspace-count="iocs">@iocCount</span></a>
       <a class="console-tab compact-tab @(ViewData["Title"]?.ToString() == "Settings" ? "active" : "")" asp-page="/Settings"><span class="tab-label">SETTINGS</span></a>
       @if (IocExclusionSettings.Get(Database, "diagnostics_visible") == "true") { <a class="console-tab diagnostics-tab @(ViewData["Title"]?.ToString() == "Diagnostics" ? "active" : "")" asp-page="/Diagnostics"><span class="tab-label desktop-only">DIAGNOSTICS</span><span class="tab-label mobile-only">LOGS</span></a> }
       <div class="tab-rule"></div>

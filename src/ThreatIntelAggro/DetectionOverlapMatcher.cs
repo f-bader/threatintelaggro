@@ -20,13 +20,24 @@ public static partial class DetectionOverlapMatcher
         Dictionary<string, string?> detection,
         IEnumerable<Dictionary<string, string?>> others,
         int limit = 3)
+        => FindCandidates(Read(detection), others.Select(Read), limit);
+
+    public static IReadOnlyDictionary<long, IReadOnlyList<DetectionOverlap>> FindForQueue(
+        IEnumerable<Dictionary<string, string?>> visible, IEnumerable<Dictionary<string, string?>> all)
     {
-        var current = Read(detection);
+        var features = all.Select(Read).Where(item => item.Id > 0).ToDictionary(item => item.Id);
+        return visible.Select(row => long.TryParse(row.GetValueOrDefault("id"), out var id) ? id : 0)
+            .Where(features.ContainsKey)
+            .ToDictionary(id => id, id => FindCandidates(features[id], features.Values, 3));
+    }
+
+    private static IReadOnlyList<DetectionOverlap> FindCandidates(
+        DetectionFeatures current, IEnumerable<DetectionFeatures> others, int limit)
+    {
         if (current.Id <= 0 || current.Tables.Count == 0 || current.FamilyId is not null) return [];
         var candidates = new Dictionary<string, DetectionOverlap>(StringComparer.Ordinal);
-        foreach (var row in others)
+        foreach (var candidate in others)
         {
-            var candidate = Read(row);
             if (candidate.Id <= 0 || candidate.Id == current.Id || candidate.Tables.Count == 0) continue;
             if (!current.Tables.Overlaps(candidate.Tables) || HasConflictingIndicators(current.Kql, candidate.Kql)) continue;
 

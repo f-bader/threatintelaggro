@@ -2,24 +2,31 @@
 @model InboxModel
 @{
     ViewData["Title"] = "Intel Inbox";
+    var fragment = ViewContext.HttpContext.Request.Headers["X-Review-Fragment"].ToString() == "inbox";
+    ViewContext.HttpContext.Response.Headers.Vary = "X-Review-Fragment";
+    if (fragment) Layout = null;
 }
+@if (!fragment) {
 <div class="page-heading">
   <div><div class="eyebrow"><span class="live-dot"></span> TELEMETRY / COLLECTION STATUS</div><h1>Article telemetry</h1><p class="subhead">Incoming threat reporting across monitored sources.</p></div>
   <a class="button button-primary" asp-page="/Feeds">MANAGE SOURCES <span>↗</span></a>
 </div>
-<section class="stat-grid" aria-label="Inbox overview">
+}
+<section class="stat-grid" aria-label="Inbox overview" data-inbox-unread="@Model.UnreadCount">
   <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">UNREAD SIGNALS</div><div class="stat-value">@Model.UnreadCount.ToString("N0")<span class="unit-mark">ITEMS</span></div><div class="stat-note"><span class="signal"></span> Awaiting review</div><div class="metric-bar"><i style="width:@(Model.TotalCount == 0 ? 0 : Math.Min(100, Model.UnreadCount * 100 / Math.Max(1, Model.TotalCount)))%"></i></div></div>
   <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">ACTIVE SOURCES</div><div class="stat-value">@Model.FeedCount.ToString("00")<span class="unit-mark">FEEDS</span></div><div class="stat-note">Next scheduled poll varies by feed</div><div class="metric-bar"><i style="width:@(Math.Min(100, Model.FeedCount))%"></i></div></div>
   <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">ARRIVED TODAY</div><div class="stat-value">@Model.TodayCount.ToString("00")<span class="unit-mark">ITEMS</span></div><div class="stat-note">First observed in the current day</div><div class="metric-bar"><i style="width:@(Math.Min(100, Model.TodayCount * 12))%"></i></div></div>
   <div class="stat-card"><div class="stat-index" aria-hidden="true"></div><div class="stat-label">ARCHIVE INDEX</div><div class="stat-value">@Model.TotalCount.ToString("N0")<span class="unit-mark">ITEMS</span></div><div class="stat-note">Retained in local SQLite</div><div class="metric-bar"><i style="width:@(Math.Min(100, Model.TotalCount * 4))%"></i></div></div>
 </section>
+@if (!fragment) {
 @if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
 <section class="panel add-feed-panel adhoc-panel"><div class="panel-head"><div><div class="eyebrow">ONE-OFF COLLECTION</div><h2>Ad hoc analysis</h2></div><span class="quiet-label">PUBLIC POST OR SCREENSHOT</span></div>
 <form method="post" asp-page-handler="AdHocAnalyze" enctype="multipart/form-data" class="adhoc-form"><label for="AdHocUrl"><span class="field-heading">Post URL <span class="optional-label">OPTIONAL WITH IMAGE</span></span><input asp-for="AdHocUrl" id="AdHocUrl" type="url" placeholder="https://bsky.app/profile/.../post/..." maxlength="2048"/><span asp-validation-for="AdHocUrl" class="validation"></span></label><label for="AdHocImage"><span class="field-heading">Screenshot <span class="optional-label">PNG · JPEG · WEBP · MAX 8 MB</span></span><input asp-for="AdHocImage" id="AdHocImage" type="file" accept="image/png,image/jpeg,image/webp"/><span asp-validation-for="AdHocImage" class="validation"></span><span class="clipboard-hint">Choose a file or focus this form and paste an image with Ctrl/Cmd+V.</span><span class="clipboard-status" data-clipboard-feedback aria-live="polite"></span></label><button class="button button-primary" type="submit">AD HOC ANALYZE <span>↗</span></button></form><p class="form-footnote">Add a public post URL, a screenshot, or both. Screenshots are transcribed with image analysis; visible post text and author details are kept with the source evidence.</p></section>
+}
 <section class="panel article-stream-panel">
  <div class="panel-head"><div class="panel-title"><span class="section-index" aria-hidden="true"></span><div><div class="eyebrow">COLLECTED INTELLIGENCE</div><h2>Article stream <span class="count-chip">@Model.ResultCount</span></h2></div></div>
   <form method="get" class="toolbar article-filter-form" id="article-filter-form"><input type="hidden" name="filtersOpen" value="@(Model.FiltersOpen ? "true" : "false")"/><div class="filter-main"><label class="search-box"><span>⌕</span><input name="search" value="@Model.Search" placeholder="Search reports" aria-label="Search reports"/></label>
-  <select name="state" aria-label="Read state"><option value="unread" selected="@(Model.State == "unread")">Unread</option><option value="all" selected="@(Model.State == "all")">All articles</option><option value="read" selected="@(Model.State == "read")">Read</option></select><label class="group-view-field"><span class="sr-only">Coverage view</span><select name="groupView" aria-label="Coverage view" data-auto-submit><option value="articles" selected="@(Model.GroupView == "articles")">All articles</option><option value="duplicates" selected="@(Model.GroupView == "duplicates")">Duplicate groups</option><option value="topics" selected="@(Model.GroupView == "topics")">Topic groups</option></select></label><label class="followed-only-toggle"><input type="checkbox" name="followedOnly" value="true" role="switch" checked="@Model.FollowedOnly"/><span>FOLLOWED VENDORS, INDUSTRIES &amp; PRODUCTS</span></label>@if (Model.GroupView != "articles") { <label class="show-ignored-toggle"><input type="checkbox" name="showIgnoredGroups" value="true" checked="@Model.ShowIgnoredGroups"/><span>SHOW IGNORED</span></label> }<button class="button button-quiet" type="submit">Search</button></div>
+  <select name="state" aria-label="Read state"><option value="unread" selected="@(Model.State == "unread")">Unread</option><option value="all" selected="@(Model.State == "all")">All articles</option><option value="read" selected="@(Model.State == "read")">Read</option></select><label class="group-view-field"><span class="sr-only">Coverage view</span><select name="groupView" aria-label="Coverage view"><option value="articles" selected="@(Model.GroupView == "articles")">All articles</option><option value="duplicates" selected="@(Model.GroupView == "duplicates")">Duplicate groups</option><option value="topics" selected="@(Model.GroupView == "topics")">Topic groups</option></select></label><label class="followed-only-toggle"><input type="checkbox" name="followedOnly" value="true" role="switch" checked="@Model.FollowedOnly"/><span>FOLLOWED VENDORS, INDUSTRIES &amp; PRODUCTS</span></label><label class="show-ignored-toggle" hidden="@(Model.GroupView == "articles")"><input type="checkbox" name="showIgnoredGroups" value="true" checked="@Model.ShowIgnoredGroups" disabled="@(Model.GroupView == "articles")"/><span>SHOW IGNORED</span></label><button class="button button-quiet" type="submit">Search</button></div>
   <details class="advanced-filters" @((Model.FiltersOpen) ? "open" : null)><summary>ADVANCED FILTERS <span data-filter-summary>@(Model.ActiveFilterCount > 0 ? $"{Model.ActiveFilterCount} active · " : "")industry · vendor · product · MITRE · actor · category</span></summary><div class="filter-grid">
     <label>Industry<select name="industry"><option value="">Any industry</option>@foreach (var value in Model.Industries) { <option value="@value" selected="@(Model.Industry == value)">@value</option> }</select></label>
     <label>Affected vendor<select name="vendor"><option value="">Any vendor</option>@foreach (var value in Model.Vendors) { <option value="@value" selected="@(Model.Vendor == value)">@value</option> }</select></label>
@@ -35,6 +42,7 @@
    <label class="bulk-select-all"><input type="checkbox" data-select-visible/><span>SELECT VISIBLE</span></label><span class="bulk-selection-count" data-selection-count aria-live="polite">0 selected</span>
    <div class="bulk-article-actions"><button class="mark-action" type="submit" name="operation" value="read" disabled>MARK READ</button><button class="mark-action" type="submit" name="operation" value="unread" disabled>MARK UNREAD</button><button class="mark-action" type="submit" name="operation" value="analyze" disabled>ANALYZE / RETRY</button><button class="mark-action" type="submit" name="operation" value="reanalyze" disabled>REANALYZE</button></div>
  </form>
+ <p class="notice" data-inbox-message role="status" hidden></p>
  <div id="article-results" aria-live="polite" aria-busy="false">
  @if (Model.GroupView != "articles")
  {
@@ -46,9 +54,9 @@
        <header class="article-group-header"><div class="article-group-copy"><div class="article-group-meta"><span>@(group.Type == "duplicate" ? "DUPLICATE COVERAGE" : "RELATED TOPIC")</span>@if (group.LabelSource == "LUNA SUGGESTED") { <span class="group-label-source" role="img" aria-label="AI-generated group name" title="AI-generated group name">✦</span> } else { <span class="group-label-source">@group.LabelSource</span> }</div><h3>@group.Label</h3><p><strong>Grouped because:</strong> @group.Reason</p></div><div class="article-group-count"><strong>@display.MatchingMembers.Count <small>/ @group.Members.Count</small></strong><span>MATCHING · @group.UnreadCount UNREAD</span></div></header>
        <div class="article-group-tools">
          <label class="group-select-visible"><input type="checkbox" data-group-select-visible aria-label="Select visible articles in this group"/><span>SELECT VISIBLE</span></label>
-         <details class="group-rename"><summary>RENAME GROUP</summary><form method="post" asp-page-handler="RenameGroup"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><label><span class="sr-only">Group name</span><input name="label" value="@(group.ManualLabel ?? group.Label)" maxlength="100" required/></label><button class="small-action" type="submit">SAVE NAME</button></form></details>
-         @if (group.Ignored) { <form method="post" asp-page-handler="IgnoreGroup"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="ignored" value="false"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><button class="small-action" type="submit">RESTORE GROUP</button></form> }
-         else { <form method="post" asp-page-handler="IgnoreGroup"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="ignored" value="true"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><button class="small-action" type="submit">IGNORE GROUP</button></form> }
+         <details class="group-rename"><summary>RENAME GROUP</summary><form method="post" data-inbox-action asp-page-handler="RenameGroup"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><label><span class="sr-only">Group name</span><input name="label" value="@(group.ManualLabel ?? group.Label)" maxlength="100" required/></label><button class="small-action" type="submit">SAVE NAME</button></form></details>
+         @if (group.Ignored) { <form method="post" data-inbox-action asp-page-handler="IgnoreGroup"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="ignored" value="false"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><button class="small-action" type="submit">RESTORE GROUP</button></form> }
+         else { <form method="post" data-inbox-action asp-page-handler="IgnoreGroup"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="ignored" value="true"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><button class="small-action" type="submit">IGNORE GROUP</button></form> }
        </div>
        <details class="article-group-members" open><summary>VIEW @display.MatchingMembers.Count MATCHING REPORT@(display.MatchingMembers.Count == 1 ? "" : "S") <span>· Article review state stays separate</span></summary>
          @foreach (var member in display.MatchingMembers)
@@ -59,15 +67,15 @@
              <div class="group-member-content"><div class="article-meta"><span class="source-tag">@member["feed_title"]</span><span>·</span><span>@dateText</span><span class="group-read-state @(member["is_read"] == "0" ? "is-unread" : "")">@(member["is_read"] == "0" ? "UNREAD" : "READ")</span><span class="pipeline-tag ai-@member["ai_status"]"><i></i> @((member["ai_status"] ?? "pending") switch { "analyzed" => "ANALYSIS COMPLETE", "analyzing" => "ANALYZING", "failed" => "ANALYSIS FAILED", _ => "AWAITING ANALYSIS" })</span>@if (member["ai_status"] == "analyzed") { <span class="category-pill category-@Model.CategoryClass(member["category"])" title="@Model.CategoryRationale(member["analysis_json"])">@ArticleCategories.Normalize(member["category"])</span> }</div>
                <h4>@if (member["url"]?.StartsWith("https://screenshot.invalid/", StringComparison.Ordinal) == true) { @member["title"] } else { <a href="@member["url"]" target="_blank" rel="noopener noreferrer">@member["title"] <span class="external">↗</span></a> }</h4><p class="article-summary">@Model.DisplaySummary(member["summary"])</p>
                <div class="article-actions">
-                 <form method="post" asp-page-handler="@(member["is_read"] == "0" ? "Read" : "Unread")"><input type="hidden" name="id" value="@member["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><button class="mark-action" type="submit">@(member["is_read"] == "0" ? "MARK AS READ" : "MARK UNREAD")</button></form>
-                 @if (member["ai_status"] == "analyzed") { <form method="post" asp-page-handler="Category" class="category-control"><input type="hidden" name="id" value="@member["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="categoryFilter" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><label class="sr-only" for="group-category-@member["id"]">Change article category</label><select id="group-category-@member["id"]" name="selectedCategory">@foreach (var option in Model.CategoryOptions) { <option value="@option" selected="@(member["category"] == option)">@option</option> }</select><button class="mark-action" type="submit">SET CATEGORY</button></form> }
-                 @if (member["ai_status"] is not "analyzed" and not "analyzing") { <form method="post" asp-page-handler="Analyze"><input type="hidden" name="id" value="@member["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><button class="mark-action" type="submit">@(member["ai_status"] == "failed" ? "RETRY ANALYSIS" : "ANALYZE NOW")</button></form> }
-                 else if (member["ai_status"] == "analyzed") { <form method="post" asp-page-handler="Reanalyze"><input type="hidden" name="id" value="@member["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><button class="mark-action" type="submit">REANALYZE</button></form> }
+                 <form method="post" data-read-action asp-page-handler="@(member["is_read"] == "0" ? "Read" : "Unread")"><input type="hidden" name="id" value="@member["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><input type="hidden" name="showIgnoredGroups" value="@Model.ShowIgnoredGroups"/><button class="mark-action" type="submit">@(member["is_read"] == "0" ? "MARK AS READ" : "MARK UNREAD")</button></form>
+                 @if (member["ai_status"] == "analyzed") { <form method="post" data-inbox-action asp-page-handler="Category" class="category-control"><input type="hidden" name="id" value="@member["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="categoryFilter" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><label class="sr-only" for="group-category-@member["id"]">Change article category</label><select id="group-category-@member["id"]" name="selectedCategory">@foreach (var option in Model.CategoryOptions) { <option value="@option" selected="@(member["category"] == option)">@option</option> }</select><input type="hidden" name="showIgnoredGroups" value="@Model.ShowIgnoredGroups"/><button class="mark-action" type="submit">SET CATEGORY</button></form> }
+                 @if (member["ai_status"] is not "analyzed" and not "analyzing") { <form method="post" data-inbox-action asp-page-handler="Analyze"><input type="hidden" name="id" value="@member["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><input type="hidden" name="showIgnoredGroups" value="@Model.ShowIgnoredGroups"/><button class="mark-action" type="submit">@(member["ai_status"] == "failed" ? "RETRY ANALYSIS" : "ANALYZE NOW")</button></form> }
+                 else if (member["ai_status"] == "analyzed") { <form method="post" data-inbox-action asp-page-handler="Reanalyze"><input type="hidden" name="id" value="@member["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><input type="hidden" name="showIgnoredGroups" value="@Model.ShowIgnoredGroups"/><button class="mark-action" type="submit">REANALYZE</button></form> }
                  @if (Model.DetectionCount(member["id"]) > 0) { <a class="mark-action" asp-page="/Detections" asp-route-articleId="@member["id"]">VIEW DETECTIONS</a> }
                  <a class="mark-action" href="@Url.Page("/Inbox", new { state = "all", search = member["title"], groupView = "articles" })#article-@member["id"]">FULL ARTICLE VIEW</a>
                </div>
              </div>
-             <form class="group-member-remove" method="post" asp-page-handler="ExcludeGroupMember"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="articleId" value="@member["id"]"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><button class="small-action" type="submit" title="Remove this article from this group suggestion">REMOVE FROM GROUP</button></form>
+             <form class="group-member-remove" method="post" data-inbox-action asp-page-handler="ExcludeGroupMember"><input type="hidden" name="groupKey" value="@group.Key"/><input type="hidden" name="articleId" value="@member["id"]"/><input type="hidden" name="returnUrl" value="@Model.ReturnUrl"/><button class="small-action" type="submit" title="Remove this article from this group suggestion">REMOVE FROM GROUP</button></form>
            </article>
          }
        </details>
@@ -87,11 +95,11 @@
     <h3>@if (article["url"]?.StartsWith("https://screenshot.invalid/", StringComparison.Ordinal) == true) { @article["title"] } else { <a href="@article["url"]" target="_blank" rel="noopener noreferrer">@article["title"] <span class="external">↗</span></a> }</h3>@if (Model.ScreenshotAuthor(article.GetValueOrDefault("screenshot_metadata_json")) is { Length: > 0 } author) { <p class="social-author">SOCIAL POST · @author</p> }<p class="article-summary">@Model.DisplaySummary(article["summary"])</p>
       @if (article["has_screenshot"] == "1") { <details class="screenshot-preview"><summary>VIEW ORIGINAL SCREENSHOT</summary><img src="@Url.Page("/Inbox", "Screenshot", new { id = article["id"] })" alt="Original uploaded social post screenshot" loading="lazy"/></details> }
       @if (article["ai_status"] == "failed") { <p class="analysis-error" title="@article["ai_error"]">Analysis did not finish. Retry when ready.</p> }
-      <div class="article-actions"><form method="post" asp-page-handler="@(article["is_read"] == "0" ? "Read" : "Unread")"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><button class="mark-action" type="submit"><span aria-hidden="true">@(article["is_read"] == "0" ? "✓" : "↺")</span>@(article["is_read"] == "0" ? "MARK AS READ" : "MARK UNREAD")</button></form>
+      <div class="article-actions"><form method="post" data-read-action asp-page-handler="@(article["is_read"] == "0" ? "Read" : "Unread")"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><input type="hidden" name="showIgnoredGroups" value="@Model.ShowIgnoredGroups"/><button class="mark-action" type="submit"><span aria-hidden="true">@(article["is_read"] == "0" ? "✓" : "↺")</span>@(article["is_read"] == "0" ? "MARK AS READ" : "MARK UNREAD")</button></form>
       @if (Model.DetectionCount(article["id"]) > 0) { <a class="mark-action" asp-page="/Detections" asp-route-articleId="@article["id"]">VIEW DETECTIONS</a> }
-      @if (article["ai_status"] == "analyzed") { <form method="post" asp-page-handler="Category" class="category-control"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="categoryFilter" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><label class="sr-only" for="category-@article["id"]">Article category</label><select id="category-@article["id"]" name="selectedCategory" aria-label="Change article category">@foreach (var categoryOption in Model.CategoryOptions) { <option value="@categoryOption" selected="@(article["category"] == categoryOption)">@categoryOption</option> }</select><button class="mark-action" type="submit">SET CATEGORY</button></form> }
-      @if (article["ai_status"] != "analyzed") { <form method="post" asp-page-handler="Analyze" data-analysis-form style="@(article["ai_status"] == "analyzing" ? "display:none" : "")"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><button class="mark-action" type="submit">@(article["ai_status"] == "failed" ? "RETRY ANALYSIS" : "ANALYZE NOW")</button></form> }
-      else { <form method="post" asp-page-handler="Reanalyze" title="Run all analysis stages again using the saved model settings"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><button class="mark-action" type="submit" title="Run all analysis stages again using the saved model settings">REANALYZE</button></form> }
+      @if (article["ai_status"] == "analyzed") { <form method="post" data-inbox-action asp-page-handler="Category" class="category-control"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="categoryFilter" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><label class="sr-only" for="category-@article["id"]">Article category</label><select id="category-@article["id"]" name="selectedCategory" aria-label="Change article category">@foreach (var categoryOption in Model.CategoryOptions) { <option value="@categoryOption" selected="@(article["category"] == categoryOption)">@categoryOption</option> }</select><input type="hidden" name="showIgnoredGroups" value="@Model.ShowIgnoredGroups"/><button class="mark-action" type="submit">SET CATEGORY</button></form> }
+      @if (article["ai_status"] != "analyzed") { <form method="post" data-inbox-action asp-page-handler="Analyze" data-analysis-form style="@(article["ai_status"] == "analyzing" ? "display:none" : "")"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><input type="hidden" name="showIgnoredGroups" value="@Model.ShowIgnoredGroups"/><button class="mark-action" type="submit">@(article["ai_status"] == "failed" ? "RETRY ANALYSIS" : "ANALYZE NOW")</button></form> }
+      else { <form method="post" data-inbox-action asp-page-handler="Reanalyze" title="Run all analysis stages again using the saved model settings"><input type="hidden" name="id" value="@article["id"]"/><input type="hidden" name="returnState" value="@Model.State"/><input type="hidden" name="search" value="@Model.Search"/><input type="hidden" name="industry" value="@Model.Industry"/><input type="hidden" name="vendor" value="@Model.Vendor"/><input type="hidden" name="product" value="@Model.Product"/><input type="hidden" name="mitre" value="@Model.Mitre"/><input type="hidden" name="threatActor" value="@Model.ThreatActor"/><input type="hidden" name="followedOnly" value="@Model.FollowedOnly"/><input type="hidden" name="filtersOpen" value="@Model.FiltersOpen"/><input type="hidden" name="category" value="@Model.Category"/><input type="hidden" name="sort" value="@Model.Sort"/><input type="hidden" name="groupView" value="@Model.GroupView"/><input type="hidden" name="showIgnoredGroups" value="@Model.ShowIgnoredGroups"/><button class="mark-action" type="submit" title="Run all analysis stages again using the saved model settings">REANALYZE</button></form> }
       @if (!string.IsNullOrWhiteSpace(article["analysis_json"])) { <details class="analysis-details"><summary>OPEN STRUCTURED INTELLIGENCE</summary>@{
         using var analysisDoc = System.Text.Json.JsonDocument.Parse(article["analysis_json"]!);
         var root = analysisDoc.RootElement;
@@ -141,6 +149,7 @@
  <div class="list-foot"><span>Showing @Model.ResultCount matching results</span><span>⟳ &nbsp;Feed checks run in the background</span></div>
  </div>
 </section>
+@if (!fragment) {
 <script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
 (() => {
   const form = document.querySelector('.adhoc-form');
@@ -192,12 +201,28 @@
   const bulkForm = document.querySelector('#bulk-articles-form');
   let controller;
   let timer;
-  const updateResults = async () => {
+  let saving = false;
+  let filtersChangedDuringSave = false;
+  const message = document.querySelector('[data-inbox-message]');
+  const ignored = form.elements.namedItem('showIgnoredGroups');
+  const syncIgnored = () => {
+    const flat = form.elements.namedItem('groupView').value === 'articles';
+    ignored.disabled = flat;
+    ignored.closest('label').hidden = flat;
+  };
+  const updateResults = async (afterAction = false, preserveSelection = false) => {
+    if (saving && !afterAction) {
+      filtersChangedDuringSave = true;
+      return;
+    }
+    if (afterAction) filtersChangedDuringSave = false;
+    syncIgnored();
     clearTimeout(timer);
     timer = undefined;
     if (openState) openState.value = details?.open ? 'true' : 'false';
     const url = new URL(form.action, window.location.href);
     url.search = new URLSearchParams(new FormData(form)).toString();
+    url.hash = window.location.hash;
     controller?.abort();
     controller = new AbortController();
     const requestController = controller;
@@ -205,13 +230,30 @@
     results?.setAttribute('aria-busy', 'true');
     if (status) status.textContent = 'Updating articles.';
     try {
-      const response = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, signal: requestController.signal });
+      const response = await fetch(url, { headers: { 'X-Review-Fragment': 'inbox' }, signal: requestController.signal });
       if (!response.ok) throw new Error(`Article filter request failed (${response.status}).`);
       const html = await response.text();
       const documentCopy = new DOMParser().parseFromString(html, 'text/html');
       const updatedResults = documentCopy.querySelector('#article-results');
       if (!updatedResults) throw new Error('Article results were missing from the response.');
-      results?.replaceWith(updatedResults);
+      if (requestController.signal.aborted) return;
+      if (afterAction) reviewUi.preserveState(results, updatedResults, preserveSelection);
+      else results?.replaceWith(updatedResults);
+      const incomingToolbar = documentCopy.querySelector('#article-filter-form');
+      for (const select of form.querySelectorAll('.filter-grid select')) {
+        const incoming = incomingToolbar?.elements.namedItem(select.name);
+        if (incoming && !filtersChangedDuringSave) {
+          const selected = incoming.value;
+          select.replaceChildren(...incoming.children);
+          select.value = selected;
+        }
+      }
+      const products = incomingToolbar?.querySelector('#article-products');
+      if (products) form.querySelector('#article-products').replaceChildren(...products.children);
+      const stats = documentCopy.querySelector('.stat-grid');
+      if (stats) document.querySelector('.stat-grid')?.replaceWith(stats);
+      const badge = document.querySelector('[data-workspace-count="inbox"]');
+      if (stats && badge) badge.textContent = stats.dataset.inboxUnread;
       const count = documentCopy.querySelector('.article-stream-panel .count-chip')?.textContent ?? '0';
       const countChip = document.querySelector('.article-stream-panel .count-chip');
       if (countChip) countChip.textContent = count;
@@ -231,15 +273,71 @@
       if (status) status.textContent = `Showing ${count} matching articles.`;
     } catch (error) {
       if (error.name === 'AbortError') return;
-      window.location.assign(url);
+      if (!afterAction) window.location.assign(url);
+      else throw error;
     } finally {
       if (controller === requestController) document.querySelector('#article-results')?.setAttribute('aria-busy', 'false');
     }
   };
+  document.addEventListener('submit', async event => {
+    if (event.defaultPrevented) return;
+    const action = event.target.closest('form[data-read-action], form[data-inbox-action], form[data-bulk-article-form]');
+    if (!action) return;
+    event.preventDefault();
+    if (saving) return;
+    saving = true;
+    message.hidden = true;
+    clearTimeout(timer);
+    controller?.abort();
+    const button = event.submitter ?? action.querySelector('button');
+    button?.setAttribute('aria-disabled', 'true');
+    let saved = false;
+    if (status) status.textContent = 'Saving action.';
+    try {
+      const payload = new FormData(action);
+      if (event.submitter?.name) payload.set(event.submitter.name, event.submitter.value);
+      const response = await fetch(action.action, { method: 'POST', body: payload, headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      if (!response.ok || response.redirected) {
+        if (response.status === 400 && response.headers.get('Content-Type')?.startsWith('text/plain')) {
+          throw new Error(await response.text());
+        }
+        throw new Error();
+      }
+      const result = await response.json();
+      saved = result.success === true;
+      if (!saved) throw new Error();
+      await updateResults(true, action !== bulkForm);
+      if (result.message) {
+        message.textContent = result.message;
+        message.hidden = false;
+      }
+    } catch (error) {
+      message.textContent = saved
+        ? 'Action saved, but the results could not be refreshed. Use Search to refresh.'
+        : error.message || 'Could not confirm the action. Refresh the results before trying again.';
+      message.hidden = false;
+      if (status) status.textContent = message.textContent;
+    } finally {
+      button?.removeAttribute('aria-disabled');
+      saving = false;
+      if (filtersChangedDuringSave) {
+        filtersChangedDuringSave = false;
+        updateResults();
+      }
+    }
+  });
   form.addEventListener('submit', event => { event.preventDefault(); updateResults(); });
-  form.querySelectorAll('select, input[type="checkbox"]').forEach(control => control.addEventListener('change', updateResults));
+  form.querySelectorAll('select, input[type="checkbox"]').forEach(control => control.addEventListener('change', () => {
+    syncIgnored();
+    updateResults();
+  }));
   form.querySelectorAll('input[name="search"], input[name="product"]').forEach(input => input.addEventListener('input', () => {
     clearTimeout(timer);
+    if (saving) {
+      filtersChangedDuringSave = true;
+      return;
+    }
+    controller?.abort();
     timer = setTimeout(updateResults, 250);
   }));
   const search = form.querySelector('input[name="search"]');
@@ -280,7 +378,7 @@
         const selection = row.querySelector('.bulk-article-select');
         if (selection) selection.dataset.aiStatus = article.status;
         badge.className = `pipeline-tag ai-${article.status}`;
-        badge.innerHTML = `<i></i> ${states[article.status] || article.status.toUpperCase()}`;
+        badge.replaceChildren(document.createElement('i'), ` ${states[article.status] || article.status.toUpperCase()}`);
         const error = article.error || 'No additional error details were recorded.';
         badge.title = article.status === 'failed' ? error : '';
         badge.setAttribute('aria-label', article.status === 'failed' ? `Analysis failed: ${error}` : states[article.status] || article.status.toUpperCase());
@@ -291,6 +389,8 @@
       }
     } catch { }
   }
-  if (document.querySelector('.ai-analyzing,.ai-pending')) setInterval(updateAnalysisStates, 5000);
+  setInterval(() => { if (document.querySelector('.ai-analyzing,.ai-pending')) updateAnalysisStates(); }, 5000);
 })();
 </script>
+
+}

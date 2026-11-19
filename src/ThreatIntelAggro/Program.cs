@@ -22,6 +22,8 @@ Directory.CreateDirectory(Path.Combine(dataDirectory, "keys"));
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDirectory, "keys")));
 builder.Services.AddSingleton<AppDatabase>();
 builder.Services.AddSingleton<IocCountCache>();
+builder.Services.AddSingleton<ManualJobs>();
+builder.Services.AddHostedService(services => services.GetRequiredService<ManualJobs>());
 builder.Services.AddSingleton<AiModelSettingsService>();
 builder.Services.AddSingleton<ArticleGroupingService>();
 builder.Services.AddSingleton<OpenAiArticleGroupNameGenerator>();
@@ -115,6 +117,11 @@ app.MapGet("/briefings/rss/{token}", (string token, HttpRequest request, AppData
         if (item.GetValueOrDefault("iocs_snapshot_json") is null) item["iocs_snapshot_json"] = System.Text.Json.JsonSerializer.Serialize(briefings.GetIocs(item));
     }
     return Results.Text(BriefingService.BuildRss(baseUrl, items), "application/rss+xml; charset=utf-8");
+});
+app.MapGet("/internal/manual-jobs/{key}", (string key, ManualJobs jobs, HttpResponse response) =>
+{
+    response.Headers.CacheControl = "no-store";
+    return jobs.Status(key) is { } status ? Results.Json(status) : Results.NotFound();
 });
 app.MapGet("/internal/articles/status", (AppDatabase database) => Results.Json(database.Query("SELECT id,ai_status AS status,ai_error AS error FROM articles ORDER BY id DESC LIMIT 200").Select(x => new { id = x["id"], status = x["status"], error = x["error"] })));
 app.MapGet("/api/iocs", (HttpRequest request, AppDatabase database) =>

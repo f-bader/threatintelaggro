@@ -108,6 +108,46 @@ public sealed class DetectionOverlapTests
         Assert.Equal("accepted", rows.Single(x => x["article_id"] == "1")["status"]);
     }
 
+    [Fact]
+    public void Batch_suggestions_match_individual_suggestions()
+    {
+        var drafts = new[]
+        {
+            Detection(1, "Unusual archive process launch", "Archive launched", "", "DeviceProcessEvents | take 10"),
+            Detection(2, "Unusual archive process launch", "Archive launched", "", "DeviceProcessEvents | take 11"),
+            Detection(3, "Different file activity", "", "", "DeviceFileEvents | take 10")
+        };
+        var results = DetectionOverlapMatcher.FindForQueue(drafts.Take(2), drafts);
+        Assert.NotEmpty(results[1]);
+        Assert.Equal(DetectionOverlapMatcher.FindCandidates(drafts[0], drafts), results[1]);
+        Assert.Equal(DetectionOverlapMatcher.FindCandidates(drafts[1], drafts), results[2]);
+        Assert.False(results.ContainsKey(3));
+    }
+
+    [Fact]
+    public void Status_returns_json_and_delete_preserves_the_archived_article_filter()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        db.Execute("INSERT INTO articles(feed_title,title,url,first_seen_utc) VALUES('feed','one','https://one.test/',?)", now);
+        db.Execute("INSERT INTO detections(article_id,local_key,alert_title,kql,guid,created_utc,updated_utc,archived) VALUES(1,'one','Rule one','q1','g1',?,?,1)", now, now);
+
+        var page = NewPage(db);
+        page.Request.Headers["X-Review-Fragment"] = "detections";
+        page.ArticleId = 1;
+        page.State = "archived";
+        Assert.IsType<JsonResult>(page.OnPostUpdate(1, "accepted", "archived"));
+        Assert.Equal("accepted", db.Query("SELECT status FROM detections").Single()["status"]);
+        page.OnGet();
+        Assert.Single(page.Items);
+        Assert.Empty(page.Overlaps);
+        var redirect = Assert.IsType<RedirectToPageResult>(page.OnPostDelete(1));
+        Assert.Equal("archived", redirect.RouteValues!["state"]);
+        Assert.Equal(1L, redirect.RouteValues["articleId"]);
+        Assert.Empty(db.Query("SELECT id FROM detections"));
+    }
+
     private static Dictionary<string, string?> Detection(long id, string title, string description, string behavior, string kql) => new()
     {
         ["id"] = id.ToString(), ["alert_title"] = title, ["description"] = description, ["kql"] = kql,

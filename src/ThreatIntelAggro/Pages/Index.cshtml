@@ -2,8 +2,13 @@
 @model IndexModel
 @{
   ViewData["Title"] = "Briefings";
+  var fragment = ViewContext.HttpContext.Request.Headers["X-Review-Fragment"].ToString() == "briefings";
+  ViewContext.HttpContext.Response.Headers.Vary = "X-Review-Fragment";
+  if (fragment) Layout = null;
 }
 <div class="page-heading"><div><div class="eyebrow"><span class="live-dot"></span> DAILY THREAT INTELLIGENCE / UTC</div><h1>Threat briefings</h1><p class="subhead">Decision-ready coverage for the vendors, industries, and products you follow.</p></div><a class="button button-secondary" asp-page="/Settings">BRIEFING SETTINGS</a></div>
+<div data-review-panel="briefings">
+@if (Model.GenerationStatus is { } job) { <p class="notice" role="status" data-manual-job="@ManualJobs.BriefingKey" data-job-state="@job.State">@job.Message</p> }
 @if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
 @if (Model.Latest is null) {
   <section class="panel briefing-empty"><div class="eyebrow">NO BRIEFING ARCHIVED</div><h2>Follow vendors, industries, or products to start your briefing stream.</h2><p>Daily generation runs at the configured UTC time. A briefing is created only when applicable analyzed articles are available.</p><a class="button button-primary" asp-page="/Settings">CONFIGURE BRIEFING</a></section>
@@ -22,5 +27,7 @@
     </section>
   </div></section>
 }
-<section class="panel briefing-archive"><div class="panel-head"><div><div class="eyebrow">HISTORICAL SNAPSHOTS</div><h2>Briefing archive <span class="count-chip">@Model.Archive.Count</span></h2></div><form method="post" asp-page-handler="Generate"><button class="button button-primary" type="submit">GENERATE NOW</button></form></div>
+<section class="panel briefing-archive"><div class="panel-head"><div><div class="eyebrow">HISTORICAL SNAPSHOTS</div><h2>Briefing archive <span class="count-chip">@Model.Archive.Count</span></h2></div><form method="post" data-review-action asp-page-handler="Generate"><button class="button button-primary" type="submit">GENERATE NOW</button></form></div>
 @if (Model.Archive.Count == 0) { <p class="form-footnote">Briefings will be archived here as they are generated.</p> } else { <div class="briefing-archive-list">@foreach (var item in Model.Archive) { <article><div><a href="/briefings/@item["id"]">@item["title"]</a><small>@DateTimeOffset.Parse(item["window_start_utc"]!).ToString("dd MMM HH:mm") – @DateTimeOffset.Parse(item["window_end_utc"]!).ToString("dd MMM HH:mm") UTC</small></div><div class="briefing-actions"><a class="small-action" href="/Briefings?handler=Markdown&amp;id=@item["id"]">MD</a><a class="small-action" href="/Briefings?handler=Pdf&amp;id=@item["id"]">PDF</a></div></article> }</div> }</section>
+
+</div>

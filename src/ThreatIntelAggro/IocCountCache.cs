@@ -1,7 +1,7 @@
 namespace ThreatIntelAggro;
 
 // Avoid reparsing every retained analysis on every rendered page. Database writes
-// invalidate the count, while a short TTL also accounts for indicators expiring.
+// that affect indicators invalidate the count, while a short TTL also accounts for indicators expiring.
 public sealed class IocCountCache(AppDatabase database)
 {
     private readonly object _gate = new();
@@ -13,11 +13,11 @@ public sealed class IocCountCache(AppDatabase database)
     {
         lock (_gate)
         {
-            var version = database.ChangeVersion;
+            var version = database.IocVersion;
             var now = DateTimeOffset.UtcNow;
             if (version == _version && now < _expires) return _count;
             var count = IocIndex.Read(database).Count;
-            if (version == database.ChangeVersion)
+            if (version == database.IocVersion)
             {
                 _count = count;
                 _version = version;

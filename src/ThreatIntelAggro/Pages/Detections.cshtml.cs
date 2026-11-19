@@ -18,11 +18,14 @@ public sealed class DetectionsModel(AppDatabase database) : PageModel
     [BindProperty(SupportsGet = true)] public string State { get; set; } = "active";
     [BindProperty(SupportsGet = true)] public long? ArticleId { get; set; }
     public string? FilterArticleTitle { get; private set; }
+    public int ActiveCount => database.ScalarInt("SELECT COUNT(*) FROM detections WHERE archived=0");
     public void OnGet() => Load();
     public IActionResult OnPostUpdate(long id, string status, string? returnState)
     {
         if (!new[] { "new", "reviewing", "accepted", "rejected", "implemented" }.Contains(status)) status = "new";
-        database.Execute("UPDATE detections SET status=?,updated_utc=? WHERE id=?", status, DateTimeOffset.UtcNow.ToString("O"), id);
+        var changed = database.Execute("UPDATE detections SET status=?,updated_utc=? WHERE id=?", status, DateTimeOffset.UtcNow.ToString("O"), id);
+        if (HttpContext is not null && Request.Headers["X-Review-Fragment"].ToString() == "detections")
+            return changed > 0 ? new JsonResult(new { status }) : NotFound();
         return RedirectToPage(new { state = returnState ?? "active", articleId = ArticleId });
     }
     public IActionResult OnPostArchive(long id, string? returnState)
@@ -120,11 +123,8 @@ public sealed class DetectionsModel(AppDatabase database) : PageModel
         var args = new List<object?>();
         if (ArticleId is > 0) { clauses.Add("d.article_id=?"); args.Add(ArticleId.Value); FilterArticleTitle = database.Query("SELECT title FROM articles WHERE id=?", ArticleId.Value).FirstOrDefault()?.GetValueOrDefault("title"); }
         Items = database.Query($"SELECT d.*,a.title AS article_title,a.url AS article_url FROM detections d JOIN articles a ON a.id=d.article_id WHERE {string.Join(" AND ", clauses)} ORDER BY d.created_utc DESC", args.ToArray());
-        var allVisible = database.Query($"SELECT d.*,a.title AS article_title,a.url AS article_url FROM detections d JOIN articles a ON a.id=d.article_id WHERE d.archived=? ORDER BY d.created_utc DESC", State == "archived" ? 1 : 0);
-        var overlapMap = new Dictionary<long, IReadOnlyList<DetectionOverlap>>();
-        foreach (var item in Items)
-            if (long.TryParse(item["id"], out var id)) overlapMap[id] = DetectionOverlapMatcher.FindCandidates(item, allVisible);
-        Overlaps = overlapMap;
+        var allVisible = ArticleId is not > 0 ? Items : database.Query($"SELECT d.*,a.title AS article_title,a.url AS article_url FROM detections d JOIN articles a ON a.id=d.article_id WHERE d.archived=? ORDER BY d.created_utc DESC", State == "archived" ? 1 : 0);
+        Overlaps = State == "archived" ? new Dictionary<long, IReadOnlyList<DetectionOverlap>>() : DetectionOverlapMatcher.FindForQueue(Items, allVisible);
         Families = allVisible.Where(x => !string.IsNullOrEmpty(x["family_id"]))
             .GroupBy(x => x["family_id"]!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<FamilyMember>)g.OrderBy(x => int.TryParse(x["iteration_number"], out var order) ? order : int.MaxValue)

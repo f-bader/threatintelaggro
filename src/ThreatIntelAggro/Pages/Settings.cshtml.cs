@@ -249,9 +249,10 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
     private void Load(bool preserveAiInput = false)
     {
         BriefingFollows = database.Query("SELECT * FROM briefing_follows ORDER BY kind,name COLLATE NOCASE");
-        AvailableBriefingVendors = briefings.Available("vendor");
-        AvailableBriefingIndustries = briefings.Available("industry");
-        AvailableBriefingProducts = briefings.Available("product");
+        var available = briefings.AvailableByKind("vendor", "industry", "product");
+        AvailableBriefingVendors = available["vendor"];
+        AvailableBriefingIndustries = available["industry"];
+        AvailableBriefingProducts = available["product"];
         BriefingEnabled = IocExclusionSettings.Get(database, "briefing_enabled") != "false";
         var savedTime = IocExclusionSettings.Get(database, "briefing_time_utc");
         BriefingTimeUtc = TimeOnly.TryParse(savedTime, out var configuredTime) ? configuredTime.ToString("HH:mm") : "06:00";

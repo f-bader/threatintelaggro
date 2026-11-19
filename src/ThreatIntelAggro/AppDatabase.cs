@@ -7,8 +7,7 @@ public sealed class AppDatabase : IDisposable
 {
     private readonly string _path;
     private readonly object _gate = new();
-    private long _changeVersion;
-    public long ChangeVersion => Interlocked.Read(ref _changeVersion);
+    public long IocVersion => long.Parse(Query("SELECT revision FROM ioc_count_state WHERE id=1").Single()["revision"]!, System.Globalization.CultureInfo.InvariantCulture);
 
     public AppDatabase(IWebHostEnvironment environment, string? dataDirectory = null)
     {
@@ -146,7 +145,52 @@ public sealed class AppDatabase : IDisposable
                 "ALTER TABLE analysis_responses ADD COLUMN search_citations_json TEXT NOT NULL DEFAULT '[]'"
             }) { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
             Exec("UPDATE detections SET guid=lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-a' || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))) WHERE guid=''");
+            InitializeIocVersion();
+            Exec("""
+                UPDATE articles SET summary=substr(json_extract(analysis_json,'$.summary.overview'),1,1200)
+                WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key='ad_hoc_summary_backfill_v1')
+                    AND (feed_title LIKE 'Ad hoc · %' OR summary='Submitted for one-off analysis.')
+                    AND CASE WHEN json_valid(analysis_json) THEN
+                        json_type(analysis_json,'$.summary.overview')='text'
+                        AND length(trim(json_extract(analysis_json,'$.summary.overview')))>0
+                        AND summary<>substr(json_extract(analysis_json,'$.summary.overview'),1,1200)
+                    ELSE 0 END;
+                INSERT OR IGNORE INTO app_settings(key,value) VALUES('ad_hoc_summary_backfill_v1','true');
+                """);
             Exec("UPDATE articles SET ai_status='pending',ai_error=NULL WHERE ai_status='analyzing'");
+        }
+    }
+
+    // Track the inputs to the IOC count at the database boundary, including writes
+    // from background jobs and cascades. SQLite rolls these revisions back with the writes.
+    private void InitializeIocVersion()
+    {
+        Exec("CREATE TABLE IF NOT EXISTS ioc_count_state (id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL); INSERT OR IGNORE INTO ioc_count_state VALUES(1,0);");
+        const string bump = "UPDATE ioc_count_state SET revision=revision+1 WHERE id=1;";
+        Exec($"""
+            CREATE TRIGGER IF NOT EXISTS ioc_count_article_insert AFTER INSERT ON articles
+                WHEN NEW.analysis_json IS NOT NULL BEGIN {bump} END;
+            CREATE TRIGGER IF NOT EXISTS ioc_count_article_delete AFTER DELETE ON articles
+                WHEN OLD.analysis_json IS NOT NULL BEGIN {bump} END;
+            CREATE TRIGGER IF NOT EXISTS ioc_count_article_update AFTER UPDATE OF id,analysis_json,published_utc,first_seen_utc ON articles
+                WHEN (OLD.analysis_json IS NOT NULL OR NEW.analysis_json IS NOT NULL)
+                    AND (OLD.id IS NOT NEW.id OR OLD.analysis_json IS NOT NEW.analysis_json
+                        OR OLD.published_utc IS NOT NEW.published_utc OR OLD.first_seen_utc IS NOT NEW.first_seen_utc)
+                BEGIN {bump} END;
+            """);
+        foreach (var table in new[] { "ioc_approvals", "ioc_dismissals", "ioc_role_overrides", "ioc_exclusions", "app_settings" })
+        {
+            foreach (var operation in new[] { "INSERT", "UPDATE", "DELETE" })
+            {
+                const string keys = "key GLOB 'ioc_expiry_*_days' OR key IN ('exclude_m365_endpoints','m365_endpoints_json')";
+                var condition = table != "app_settings" ? "" : operation switch
+                {
+                    "INSERT" => $"WHEN ({keys.Replace("key", "NEW.key")})",
+                    "DELETE" => $"WHEN ({keys.Replace("key", "OLD.key")})",
+                    _ => $"WHEN ({keys.Replace("key", "NEW.key")}) OR ({keys.Replace("key", "OLD.key")})"
+                };
+                Exec($"CREATE TRIGGER IF NOT EXISTS ioc_count_{table}_{operation} AFTER {operation} ON {table} {condition} BEGIN {bump} END;");
+            }
         }
     }
 
@@ -185,6 +229,12 @@ public sealed class AppDatabase : IDisposable
         }
     }
 
+    public int SetArticleReadState(long id, bool read)
+    {
+        var state = read ? 1 : 0;
+        return Execute("UPDATE articles SET is_read=? WHERE id=? AND is_read<>?", state, id, state);
+    }
+
     public int Execute(string sql, params object?[] args)
     {
         lock (_gate)
@@ -195,7 +245,6 @@ public sealed class AppDatabase : IDisposable
                 var status = Native.sqlite3_step(statement);
                 if (status != 101) throw Error(status);
                 changed = Native.sqlite3_changes(_handle);
-                if (changed != 0) Interlocked.Increment(ref _changeVersion);
             });
             return changed;
         }

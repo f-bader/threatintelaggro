@@ -46,6 +46,8 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
     [BindProperty] public IFormFile? AdHocImage { get; set; }
     [BindProperty] public List<long> SelectedIds { get; set; } = [];
 
+    private bool IsAsyncAction => HttpContext is not null && Request.Headers.XRequestedWith.ToString() == "XMLHttpRequest";
+
     public string ReturnUrl => $"{Request.Path}{Request.QueryString}";
 
     public async Task OnGetAsync(CancellationToken cancellationToken = default)
@@ -55,17 +57,17 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
         GroupView = string.IsNullOrEmpty(GroupView)
             ? InboxCoverageSettings.ReadDefaultView(database)
             : InboxCoverageSettings.IsValidView(GroupView) ? GroupView : "articles";
-        RefreshAdHocSummaries();
         UnreadCount = database.ScalarInt("SELECT COUNT(*) FROM articles WHERE is_read=0");
         FeedCount = database.ScalarInt("SELECT COUNT(*) FROM feeds WHERE enabled=1");
         TodayCount = database.ScalarInt("SELECT COUNT(*) FROM articles WHERE first_seen_utc >= ?", DateTimeOffset.UtcNow.Date.ToString("O"));
         TotalCount = database.ScalarInt("SELECT COUNT(*) FROM articles");
-        Industries = IocIndex.Options(database, "industries");
-        Vendors = IocIndex.Options(database, "vendors");
-        Products = IocIndex.Options(database, "products");
-        MitreMappings = IocIndex.Options(database, "mitre_mappings");
-        ThreatActors = IocIndex.Options(database, "threat_actors");
-        var follows = database.Query("SELECT kind,name FROM briefing_follows WHERE is_enabled=1")
+        var facets = IocIndex.OptionsByField(database, "industries", "vendors", "products", "mitre_mappings", "threat_actors");
+        Industries = facets["industries"];
+        Vendors = facets["vendors"];
+        Products = facets["products"];
+        MitreMappings = facets["mitre_mappings"];
+        ThreatActors = facets["threat_actors"];
+        var follows = (FollowedOnly ? database.Query("SELECT kind,name FROM briefing_follows WHERE is_enabled=1") : [])
             .Select(x => (Kind: x["kind"] ?? "", Name: x["name"] ?? ""))
             .Where(x => x.Name.Length > 0).ToArray();
         var conditions = new List<string>();
@@ -84,16 +86,19 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
             ? "CASE category WHEN 'Time-Critical Threat' THEN 0 WHEN 'Novel Research' THEN 1 WHEN 'Actionable IOCs' THEN 2 WHEN 'Existing Research' THEN 3 ELSE 4 END,COALESCE(published_utc,first_seen_utc) DESC"
             : "COALESCE(published_utc,first_seen_utc) DESC";
         var select = "SELECT id,title,url,summary,published_utc,first_seen_utc,is_read,feed_title,ai_status,ai_error,analysis_json,source_ledger_json,screenshot_metadata_json,CASE WHEN screenshot_data_url IS NOT NULL THEN '1' ELSE '0' END AS has_screenshot,category,evidence_verified FROM articles";
-        var articles = database.Query($"{select} {where} ORDER BY {ordering}", args.ToArray());
+        var flat = GroupView == "articles" || grouping is null;
+        var needsMappingFilter = FollowedOnly || new[] { Industry, Vendor, Product, Mitre, ThreatActor }.Any(value => !string.IsNullOrWhiteSpace(value));
+        var limit = flat && !needsMappingFilter ? " LIMIT 100" : "";
+        var articles = database.Query($"{select} {where} ORDER BY {ordering},id DESC{limit}", args.ToArray());
         var matching = articles.Where(MatchesMappings).Where(article => !FollowedOnly || MatchesFollowed(article, follows)).ToArray();
-        if (GroupView == "articles" || grouping is null)
+        if (flat)
         {
             Articles = matching.Take(100).ToArray();
             return;
         }
 
         var groupingArticles = database.Query($"{select} ORDER BY {ordering}");
-        var candidates = grouping.ReadStored(groupingArticles, GroupView, ShowIgnoredGroups);
+        var candidates = grouping!.ReadStored(groupingArticles, GroupView, ShowIgnoredGroups);
         var matchingById = matching.Where(article => long.TryParse(article.GetValueOrDefault("id"), out _))
             .ToDictionary(article => article["id"]!, article => article, StringComparer.Ordinal);
         var claimedArticleIds = new HashSet<string>(StringComparer.Ordinal);
@@ -191,25 +196,13 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
         catch (FormatException) { return NotFound(); }
     }
 
-    public IActionResult OnPostCategory(long id, string? selectedCategory, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? categoryFilter, string? sort, bool followedOnly = false, string? groupView = "articles")
+    public IActionResult OnPostCategory(long id, string? selectedCategory, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? categoryFilter, string? sort, bool followedOnly = false, string? groupView = "articles", bool showIgnoredGroups = false)
     {
+        if (IsAsyncAction && !ArticleCategories.IsValid(selectedCategory)) return BadRequest("Invalid article category.");
         if (ArticleCategories.IsValid(selectedCategory))
             database.Execute("UPDATE articles SET category=?,category_manual=1 WHERE id=?", ArticleCategories.Normalize(selectedCategory), id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category = categoryFilter, sort = sort == "priority" ? "priority" : "recent", followedOnly, groupView });
-    }
-
-    private void RefreshAdHocSummaries()
-    {
-        foreach (var article in database.Query("SELECT id,analysis_json FROM articles WHERE (feed_title LIKE 'Ad hoc · %' OR summary='Submitted for one-off analysis.') AND analysis_json IS NOT NULL"))
-        {
-            try
-            {
-                using var document = System.Text.Json.JsonDocument.Parse(article["analysis_json"]!);
-                var summary = document.RootElement.GetProperty("summary").GetProperty("overview").GetString();
-                if (!string.IsNullOrWhiteSpace(summary)) database.Execute("UPDATE articles SET summary=? WHERE id=?", summary.Length > 1200 ? summary[..1200] : summary, article["id"]);
-            }
-            catch (Exception ex) when (ex is System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException) { }
-        }
+        if (IsAsyncAction) return new JsonResult(new { success = true });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category = categoryFilter, sort = sort == "priority" ? "priority" : "recent", followedOnly, groupView, showIgnoredGroups });
     }
 
     private bool MatchesMappings(Dictionary<string, string?> article)
@@ -226,31 +219,35 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
         catch (System.Text.Json.JsonException) { return false; }
     }
 
-    public IActionResult OnPostRead(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles")
+    public IActionResult OnPostRead(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles", bool showIgnoredGroups = false)
     {
-        database.Execute("UPDATE articles SET is_read=1 WHERE id=?", id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly, groupView });
+        database.SetArticleReadState(id, true);
+        if (IsAsyncAction) return new JsonResult(new { success = true });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly, groupView, showIgnoredGroups });
     }
 
-    public IActionResult OnPostUnread(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles")
+    public IActionResult OnPostUnread(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles", bool showIgnoredGroups = false)
     {
-        database.Execute("UPDATE articles SET is_read=0 WHERE id=?", id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly, groupView });
+        database.SetArticleReadState(id, false);
+        if (IsAsyncAction) return new JsonResult(new { success = true });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly, groupView, showIgnoredGroups });
     }
 
-    public IActionResult OnPostAnalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles")
+    public IActionResult OnPostAnalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles", bool showIgnoredGroups = false)
     {
         analyzer.QueueAnalysis(id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly, groupView });
+        if (IsAsyncAction) return new JsonResult(new { success = true });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly, groupView, showIgnoredGroups });
     }
 
-    public IActionResult OnPostReanalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles")
+    public IActionResult OnPostReanalyze(long id, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles", bool showIgnoredGroups = false)
     {
         analyzer.QueueReanalysis(id);
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly, groupView });
+        if (IsAsyncAction) return new JsonResult(new { success = true });
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort, followedOnly, groupView, showIgnoredGroups });
     }
 
-    public IActionResult OnPostBulk(string? operation, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles")
+    public IActionResult OnPostBulk(string? operation, string? returnState, string? search, string? industry, string? vendor, string? mitre, string? threatActor, bool filtersOpen, string? category, string? sort, bool followedOnly = false, string? groupView = "articles", bool showIgnoredGroups = false)
     {
         var ids = SelectedIds.Distinct().Where(id => id > 0).Take(100).ToArray();
         var changed = 0;
@@ -259,10 +256,10 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
             switch (operation)
             {
                 case "read":
-                    changed += database.Execute("UPDATE articles SET is_read=1 WHERE id=? AND is_read=0", id);
+                    changed += database.SetArticleReadState(id, true);
                     break;
                 case "unread":
-                    changed += database.Execute("UPDATE articles SET is_read=0 WHERE id=? AND is_read=1", id);
+                    changed += database.SetArticleReadState(id, false);
                     break;
                 case "analyze":
                     var status = database.Query("SELECT ai_status FROM articles WHERE id=?", id).FirstOrDefault()?["ai_status"];
@@ -273,7 +270,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
                     break;
             }
         }
-        Notice = operation switch
+        var message = operation switch
         {
             "read" => $"Marked {changed} article(s) as read.",
             "unread" => $"Marked {changed} article(s) as unread.",
@@ -281,27 +278,33 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
             "reanalyze" => $"Queued {changed} analyzed article(s) for reanalysis.",
             _ => "No bulk action was applied."
         };
-        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort = sort == "priority" ? "priority" : "recent", followedOnly, groupView });
+        if (IsAsyncAction) return new JsonResult(new { success = true, message });
+        Notice = message;
+        return RedirectToPage(new { state = returnState ?? "unread", search, industry, vendor, product = Product, mitre, threatActor, filtersOpen, category, sort = sort == "priority" ? "priority" : "recent", followedOnly, groupView, showIgnoredGroups });
     }
 
     public IActionResult OnPostRenameGroup(string? groupKey, string? label, string? returnUrl)
     {
         var saved = grouping?.Rename(groupKey ?? "", label ?? "") == true;
-        Notice = saved ? "Group name saved." : "Enter a group name between 2 and 100 characters.";
-        return ReturnToInbox(returnUrl);
+        return GroupResult(returnUrl, saved ? "Group name saved." : "Enter a group name between 2 and 100 characters.", saved);
     }
 
     public IActionResult OnPostIgnoreGroup(string? groupKey, bool ignored, string? returnUrl)
     {
         grouping?.SetIgnored(groupKey ?? "", ignored);
-        Notice = ignored ? "Group hidden from suggested coverage." : "Group restored to suggested coverage.";
-        return ReturnToInbox(returnUrl);
+        return GroupResult(returnUrl, ignored ? "Group hidden from suggested coverage." : "Group restored to suggested coverage.");
     }
 
     public IActionResult OnPostExcludeGroupMember(string? groupKey, long articleId, string? returnUrl)
     {
         grouping?.ExcludeMember(groupKey ?? "", articleId);
-        Notice = "Article removed from this group suggestion.";
+        return GroupResult(returnUrl, "Article removed from this group suggestion.");
+    }
+
+    private IActionResult GroupResult(string? returnUrl, string message, bool success = true)
+    {
+        if (IsAsyncAction) return success ? new JsonResult(new { success, message }) : BadRequest(message);
+        Notice = message;
         return ReturnToInbox(returnUrl);
     }
 

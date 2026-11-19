@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using ThreatIntelAggro;
 using Xunit;
 
@@ -224,6 +225,47 @@ public sealed class BriefingTests
     {
         var date = published.ToString("O");
         db.Execute("INSERT INTO articles(feed_title,title,url,published_utc,first_seen_utc,ai_status) VALUES('Fixture','Pending article','https://example.test/pending',?,?,'pending')", date, date);
+    }
+
+    [Fact]
+    public async Task Manual_briefing_job_reports_progress_deduplicates_and_archives()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        db.Execute("INSERT INTO briefing_follows(kind,name) VALUES('vendor','Microsoft')");
+        InsertArticle(db, "Fixture report", DateTimeOffset.UtcNow.AddHours(-1), "Observed evidence.", "Microsoft");
+        var writer = new BlockingWriter();
+        using var provider = new ServiceCollection().AddScoped(_ => new BriefingService(db, writer)).BuildServiceProvider();
+        using var jobs = new ManualJobs(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<ManualJobs>.Instance);
+        Assert.Equal("queued", jobs.EnqueueBriefing().State);
+        Assert.Equal("queued", jobs.EnqueueBriefing().State);
+        await jobs.StartAsync(CancellationToken.None);
+        try
+        {
+            await writer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("running", jobs.EnqueueBriefing().State);
+            writer.Release.SetResult();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (jobs.Status(ManualJobs.BriefingKey)?.State == "running")
+                await Task.Delay(10, timeout.Token);
+            Assert.Equal("complete", jobs.Status(ManualJobs.BriefingKey)?.State);
+            Assert.Single(db.Query("SELECT id FROM briefings"));
+        }
+        finally { await jobs.StopAsync(CancellationToken.None); }
+    }
+
+    private sealed class BlockingWriter : IBriefingWriter
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<BriefingDraft> WriteAsync(string prompt, IReadOnlyList<BriefingArticle> articles,
+            IReadOnlyList<Dictionary<string, string?>> detections, CancellationToken ct)
+        {
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(ct);
+            return new BriefingDraft("Fixture briefing", "Executive summary", "Detection summary", "IOC summary");
+        }
     }
 
     private sealed class FakeWriter : IBriefingWriter

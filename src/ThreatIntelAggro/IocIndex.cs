@@ -156,19 +156,22 @@ public static class IocIndex
             .ToArray();
     }
 
-    public static string[] Options(AppDatabase database, string field)
+    public static string[] Options(AppDatabase database, string field) => OptionsByField(database, field)[field];
+
+    public static IReadOnlyDictionary<string, string[]> OptionsByField(AppDatabase database, params string[] fields)
     {
-        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var options = fields.ToDictionary(field => field, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         foreach (var article in database.Query("SELECT analysis_json FROM articles WHERE analysis_json IS NOT NULL"))
         {
             try
             {
                 using var document = JsonDocument.Parse(article["analysis_json"]!);
-                foreach (var value in Values(document.RootElement, field)) values.Add(value);
+                if (document.RootElement.ValueKind != JsonValueKind.Object) continue;
+                foreach (var (field, values) in options) values.UnionWith(Values(document.RootElement, field));
             }
             catch (JsonException) { }
         }
-        return values.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        return options.ToDictionary(pair => pair.Key, pair => pair.Value.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
     public static string[] Values(JsonElement root, string field)

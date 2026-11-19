@@ -60,6 +60,125 @@ public sealed class ArticleProductTests
         Assert.Equal("1", fixture.Database.Query("SELECT is_read FROM articles WHERE id=?", id).Single()["is_read"]);
     }
 
+    [Fact]
+    public void Read_action_preserves_group_view_and_does_not_invalidate_ioc_cache_version()
+    {
+        using var fixture = DatabaseFixture.Create();
+        Insert(fixture.Database, "Review", "Gateway");
+        var id = long.Parse(fixture.Database.Query("SELECT id FROM articles").Single()["id"]!);
+        var version = fixture.Database.IocVersion;
+        var page = new InboxModel(fixture.Database, null!);
+        var redirect = Assert.IsType<RedirectToPageResult>(page.OnPostRead(id, "unread", null, null, null, null, null, false, null, "recent", false, "topics", true));
+        Assert.Equal("topics", redirect.RouteValues!["groupView"]);
+        Assert.Equal(true, redirect.RouteValues["showIgnoredGroups"]);
+        Assert.Equal(version, fixture.Database.IocVersion);
+        Assert.Equal("1", fixture.Database.Query("SELECT is_read FROM articles WHERE id=?", id).Single()["is_read"]);
+        fixture.Database.Execute("UPDATE articles SET analysis_json=NULL WHERE id=?", id);
+        Assert.True(fixture.Database.IocVersion > version);
+    }
+
+    [Fact]
+    public void Ajax_read_action_returns_json_and_persists_state()
+    {
+        using var fixture = DatabaseFixture.Create();
+        Insert(fixture.Database, "Review", "Gateway");
+        var id = long.Parse(fixture.Database.Query("SELECT id FROM articles").Single()["id"]!);
+        var page = new InboxModel(fixture.Database, null!);
+        page.PageContext.HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        page.Request.Headers.XRequestedWith = "XMLHttpRequest";
+        Assert.IsType<JsonResult>(page.OnPostRead(id, "all", null, null, null, null, null, false, null, "recent"));
+        Assert.Equal("1", fixture.Database.Query("SELECT is_read FROM articles WHERE id=?", id).Single()["is_read"]);
+    }
+
+    [Fact]
+    public void Bulk_ajax_read_updates_selection_without_invalidating_ioc_version()
+    {
+        using var fixture = DatabaseFixture.Create();
+        Insert(fixture.Database, "First", "Gateway");
+        Insert(fixture.Database, "Second", "Gateway");
+        var ids = fixture.Database.Query("SELECT id FROM articles ORDER BY id").Select(row => long.Parse(row["id"]!)).ToList();
+        var version = fixture.Database.IocVersion;
+        var page = new InboxModel(fixture.Database, null!) { SelectedIds = ids };
+        page.PageContext.HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        page.Request.Headers.XRequestedWith = "XMLHttpRequest";
+        Assert.IsType<JsonResult>(page.OnPostBulk("read", "unread", null, null, null, null, null, false, null, "recent"));
+        Assert.All(fixture.Database.Query("SELECT is_read FROM articles"), row => Assert.Equal("1", row["is_read"]));
+        Assert.Equal(version, fixture.Database.IocVersion);
+    }
+
+    [Fact]
+    public void Ioc_count_tracks_committed_review_and_expiry_changes_but_ignores_workflow_writes()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var now = DateTimeOffset.UtcNow;
+        db.Execute("INSERT INTO articles(id,feed_title,title,url,first_seen_utc,analysis_json) VALUES(1,'Fixture','Report','https://example.test',?,?)",
+            now.AddDays(-2).ToString("O"), """
+            {"iocs":[{"type":"domain","value":"indicator.example.test","role":"unknown"}]}
+            """);
+        db.Execute("INSERT INTO detections(article_id,local_key,alert_title,kql,guid,created_utc,updated_utc) VALUES(1,'fixture','Draft','','id',?,?)", now.ToString("O"), now.ToString("O"));
+        IocIndex.Approve(db, 1, "domain", "indicator.example.test");
+        var cache = new IocCountCache(db);
+        Assert.Equal(0, cache.GetCount());
+        var version = db.IocVersion;
+
+        var detection = new DetectionsModel(db);
+        Assert.IsType<RedirectToPageResult>(detection.OnPostUpdate(1, "accepted", "active"));
+        Assert.IsType<RedirectToPageResult>(detection.OnPostArchive(1, "active"));
+        Assert.Equal("accepted", db.Query("SELECT status FROM detections").Single()["status"]);
+        db.Execute("UPDATE articles SET category='Novel Research', summary='Updated review notes' WHERE id=1");
+        db.Execute("INSERT INTO app_settings VALUES('diagnostics_visible','true')");
+        Assert.Equal(version, db.IocVersion);
+        Assert.Equal(0, cache.GetCount());
+
+        var iocs = new IocsModel(db);
+        Assert.IsType<RedirectToPageResult>(iocs.OnPostClassify(1, "domain", "indicator.example.test", "suspicious"));
+        Assert.Equal(1, cache.GetCount());
+        iocs.OnPostDismiss(1, "domain", "indicator.example.test");
+        Assert.Equal(0, cache.GetCount());
+        iocs.OnPostRestore(1, "domain", "indicator.example.test");
+        Assert.Equal(1, cache.GetCount());
+
+        version = db.IocVersion;
+        Assert.Throws<InvalidOperationException>(() => db.Transaction(() =>
+        {
+            iocs.OnPostResetClassification(1, "domain", "indicator.example.test");
+            throw new InvalidOperationException("Rollback fixture");
+        }));
+        Assert.Equal(version, db.IocVersion);
+        Assert.Equal(1, cache.GetCount());
+        db.Execute("INSERT INTO app_settings VALUES('ioc_expiry_domain_days','1')");
+        Assert.Equal(0, cache.GetCount());
+        db.Execute("UPDATE articles SET published_utc=? WHERE id=1", now.ToString("O"));
+        Assert.Equal(1, cache.GetCount());
+        db.Execute("DELETE FROM articles WHERE id=1");
+        Assert.Equal(0, cache.GetCount());
+    }
+
+    [Fact]
+    public async Task Legacy_ad_hoc_summary_is_backfilled_during_upgrade_and_inbox_reads_do_not_rewrite_it()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        db.Execute("DELETE FROM app_settings WHERE key='ad_hoc_summary_backfill_v1'");
+        db.Execute("INSERT INTO articles(feed_title,title,url,summary,first_seen_utc,analysis_json) VALUES('Ad hoc · Fixture','Report','https://example.test','Submitted for one-off analysis.',?,?)",
+            DateTimeOffset.UtcNow.ToString("O"), """
+            {"summary":{"overview":"An overview from stored analysis."}}
+            """);
+        db.Execute("INSERT INTO articles(feed_title,title,url,first_seen_utc,analysis_json) VALUES('Ad hoc · Fixture','Malformed','https://example.test/bad',?,'{bad')",
+            DateTimeOffset.UtcNow.ToString("O"));
+
+        db.Initialize();
+        var page = new InboxModel(db, null!) { GroupView = "articles", Search = "stored analysis" };
+        Assert.Equal("An overview from stored analysis.", db.Query("SELECT summary FROM articles WHERE title='Report'").Single()["summary"]);
+        await page.OnGetAsync();
+        Assert.Single(page.Articles);
+
+        db.Execute("UPDATE articles SET summary='Updated outside the inbox' WHERE title='Report'");
+        await page.OnGetAsync();
+        Assert.Empty(page.Articles);
+    }
+
     [Theory]
     [InlineData("vendor", "Acme")]
     [InlineData("industry", "Healthcare")]

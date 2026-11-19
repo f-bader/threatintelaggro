@@ -6,7 +6,7 @@ using System.Xml.Linq;
 namespace ThreatIntelAggro.Pages;
 
 [RequestSizeLimit(3_000_000)]
-public class FeedsModel(AppDatabase database, FeedReader reader) : PageModel
+public class FeedsModel(AppDatabase database, FeedReader reader, ManualJobs? jobs = null) : PageModel
 {
     public IReadOnlyList<Dictionary<string, string?>> Feeds { get; private set; } = [];
     [BindProperty] public string Title { get; set; } = "";
@@ -24,6 +24,8 @@ public class FeedsModel(AppDatabase database, FeedReader reader) : PageModel
     [BindProperty(SupportsGet = true)] public string Sort { get; set; } = "name";
     [BindProperty(SupportsGet = true)] public string Direction { get; set; } = "asc";
     public int TotalFeedCount { get; private set; }
+
+    public ManualJobStatus? RefreshStatus(long id) => jobs?.Status(ManualJobs.FeedKey(id));
 
     public string NextDirection(string column) => Sort == column && Direction == "asc" ? "desc" : "asc";
     public string SortIndicator(string column) => Sort != column ? "↕" : Direction == "asc" ? "▲" : "▼";
@@ -81,6 +83,12 @@ public class FeedsModel(AppDatabase database, FeedReader reader) : PageModel
 
     public async Task<IActionResult> OnPostRefreshAsync(long id, CancellationToken cancellationToken)
     {
+        if (jobs is not null)
+        {
+            var status = jobs.EnqueueFeed(id);
+            if (status.State == "failed") Notice = status.Message;
+            return RedirectToCurrentView();
+        }
         try { var count = await reader.RefreshAsync(id, cancellationToken); Notice = $"Refresh complete. {count} new article{(count == 1 ? "" : "s")} found."; }
         catch (Exception exception) when (exception is not OperationCanceledException) { Notice = $"Refresh failed: {exception.Message}"; }
         return RedirectToCurrentView();
