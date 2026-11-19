@@ -10,6 +10,24 @@ namespace ThreatIntelAggro.Tests;
 public sealed class ArticleProductTests
 {
     [Fact]
+    public async Task Inbox_uses_saved_default_coverage_view_only_when_the_query_omits_it()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var defaultPage = new InboxModel(fixture.Database, null!);
+        await defaultPage.OnGetAsync();
+        Assert.Equal("topics", defaultPage.GroupView);
+
+        IocExclusionSettings.Set(fixture.Database, InboxCoverageSettings.DefaultViewKey, "duplicates");
+        var configuredPage = new InboxModel(fixture.Database, null!);
+        await configuredPage.OnGetAsync();
+        Assert.Equal("duplicates", configuredPage.GroupView);
+
+        var explicitPage = new InboxModel(fixture.Database, null!) { GroupView = "articles" };
+        await explicitPage.OnGetAsync();
+        Assert.Equal("articles", explicitPage.GroupView);
+    }
+
+    [Fact]
     public async Task Product_filter_uses_saved_analysis_and_exposes_only_current_product_facets()
     {
         using var fixture = DatabaseFixture.Create();

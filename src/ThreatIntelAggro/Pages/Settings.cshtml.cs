@@ -14,11 +14,13 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
     public string BriefingPrompt { get; private set; } = BriefingService.DefaultPrompt;
     public bool BriefingFeedActive { get; private set; }
     public bool DiagnosticsVisible { get; private set; }
+    public string DefaultCoverageView { get; private set; } = InboxCoverageSettings.DefaultView;
     [TempData] public string? GeneratedBriefingFeedUrl { get; set; }
     [BindProperty] public string FollowKind { get; set; } = "vendor";
     [BindProperty] public string FollowName { get; set; } = "";
     [BindProperty] public bool BriefingEnabledInput { get; set; } = true;
     [BindProperty] public bool DiagnosticsVisibleInput { get; set; }
+    [BindProperty] public string DefaultCoverageViewInput { get; set; } = InboxCoverageSettings.DefaultView;
     [BindProperty] public string BriefingTimeInput { get; set; } = "06:00";
     [BindProperty] public string? BriefingPromptInput { get; set; } = BriefingService.DefaultPrompt;
     public IReadOnlyList<Dictionary<string, string?>> IocExclusions { get; private set; } = [];
@@ -185,6 +187,19 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
         return RedirectToPage();
     }
 
+    public IActionResult OnPostSaveInboxDefaults()
+    {
+        if (!InboxCoverageSettings.IsValidView(DefaultCoverageViewInput))
+        {
+            Notice = "Choose a valid default coverage view.";
+            Load();
+            return Page();
+        }
+        IocExclusionSettings.Set(database, InboxCoverageSettings.DefaultViewKey, DefaultCoverageViewInput);
+        Notice = "Inbox defaults saved.";
+        return RedirectToPage();
+    }
+
     public IActionResult OnPostSaveIocExpiry()
     {
         var values = new[] { IpExpiryDays, DomainExpiryDays, HashExpiryDays, UrlExpiryDays, EmailExpiryDays, SoftwareIdExpiryDays, FileArtifactExpiryDays, HostArtifactExpiryDays, CertificateExpiryDays, OtherExpiryDays };
@@ -245,6 +260,8 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
         BriefingFeedActive = !string.IsNullOrWhiteSpace(IocExclusionSettings.Get(database, "briefing_rss_hash"));
         DiagnosticsVisible = IocExclusionSettings.Get(database, "diagnostics_visible") == "true";
         DiagnosticsVisibleInput = DiagnosticsVisible;
+        DefaultCoverageView = InboxCoverageSettings.ReadDefaultView(database);
+        DefaultCoverageViewInput = DefaultCoverageView;
         ApiKeyConfigured = !string.IsNullOrWhiteSpace(configuration["OpenAI:ApiKey"] ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
         CurrentAiSettings = aiModelSettings.Read();
         if (!preserveAiInput)

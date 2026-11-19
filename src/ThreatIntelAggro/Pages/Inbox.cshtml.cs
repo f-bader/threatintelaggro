@@ -40,7 +40,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
     [BindProperty(SupportsGet = true)] public bool FiltersOpen { get; set; }
     [BindProperty(SupportsGet = true)] public string? Category { get; set; }
     [BindProperty(SupportsGet = true)] public string Sort { get; set; } = "recent";
-    [BindProperty(SupportsGet = true)] public string GroupView { get; set; } = "articles";
+    [BindProperty(SupportsGet = true)] public string GroupView { get; set; } = "";
     [BindProperty(SupportsGet = true)] public bool ShowIgnoredGroups { get; set; }
     [BindProperty] public string AdHocUrl { get; set; } = "";
     [BindProperty] public IFormFile? AdHocImage { get; set; }
@@ -52,7 +52,9 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
     {
         if (!ArticleCategories.IsValid(Category)) Category = null;
         Sort = Sort == "priority" ? "priority" : "recent";
-        GroupView = GroupView is "duplicates" or "topics" ? GroupView : "articles";
+        GroupView = string.IsNullOrEmpty(GroupView)
+            ? InboxCoverageSettings.ReadDefaultView(database)
+            : InboxCoverageSettings.IsValidView(GroupView) ? GroupView : "articles";
         RefreshAdHocSummaries();
         UnreadCount = database.ScalarInt("SELECT COUNT(*) FROM articles WHERE is_read=0");
         FeedCount = database.ScalarInt("SELECT COUNT(*) FROM feeds WHERE enabled=1");

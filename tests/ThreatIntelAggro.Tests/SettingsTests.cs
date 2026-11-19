@@ -35,6 +35,35 @@ public sealed class SettingsTests
     }
 
     [Fact]
+    public void Inbox_default_coverage_view_is_topic_groups_and_can_be_configured()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var settings = fixture.CreateSettingsModel();
+
+        settings.OnGet();
+        Assert.Equal("topics", settings.DefaultCoverageView);
+        Assert.Equal("", IocExclusionSettings.Get(fixture.Database, InboxCoverageSettings.DefaultViewKey));
+
+        settings.DefaultCoverageViewInput = "duplicates";
+        Assert.IsType<Microsoft.AspNetCore.Mvc.RedirectToPageResult>(settings.OnPostSaveInboxDefaults());
+        settings.OnGet();
+
+        Assert.Equal("duplicates", settings.DefaultCoverageView);
+        Assert.Equal("duplicates", IocExclusionSettings.Get(fixture.Database, InboxCoverageSettings.DefaultViewKey));
+    }
+
+    [Fact]
+    public void Inbox_default_coverage_view_rejects_unknown_values()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var settings = fixture.CreateSettingsModel();
+        settings.DefaultCoverageViewInput = "unknown";
+
+        Assert.IsType<Microsoft.AspNetCore.Mvc.RazorPages.PageResult>(settings.OnPostSaveInboxDefaults());
+        Assert.Equal("", IocExclusionSettings.Get(fixture.Database, InboxCoverageSettings.DefaultViewKey));
+    }
+
+    [Fact]
     public async Task Briefing_follow_controls_add_catalog_and_custom_names_and_preserve_generation()
     {
         using var fixture = DatabaseFixture.Create();
