@@ -14,6 +14,31 @@ namespace ThreatIntelAggro.Tests;
 public sealed class ArticleGroupingTests
 {
     [Fact]
+    public void Stored_groups_backfill_and_reconcile_article_changes_without_losing_review_decisions()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var first = InsertArticle(db, "CVE-2026-11111 first report", "First report.", "https://example.test/one", DateTimeOffset.UtcNow);
+        InsertArticle(db, "CVE-2026-11111 second report", "Second report.", "https://example.test/two", DateTimeOffset.UtcNow);
+        var groups = new ArticleGroupingService(db);
+        Assert.True(db.ScalarInt("SELECT revision-completed_revision FROM article_group_state WHERE id=1") > 0);
+        groups.Reconcile();
+        var original = Assert.Single(groups.ReadStored(ReadArticles(db), "topics"));
+        Assert.True(groups.Rename(original.Key, "Reviewed coverage"));
+        Assert.True(groups.ExcludeMember(original.Key, first));
+        InsertArticle(db, "CVE-2026-11111 third report", "Third report.", "https://example.test/three", DateTimeOffset.UtcNow);
+        Assert.True(db.ScalarInt("SELECT revision-completed_revision FROM article_group_state WHERE id=1") > 0);
+        groups.Reconcile();
+        var updated = Assert.Single(groups.ReadStored(ReadArticles(db), "topics"));
+        Assert.Equal("Reviewed coverage", updated.Label);
+        Assert.Equal(2, updated.Members.Count);
+        Assert.DoesNotContain(updated.Members, x => x.Article["id"] == first.ToString());
+        Assert.Equal(0, db.ScalarInt("SELECT revision-completed_revision FROM article_group_state WHERE id=1"));
+        db.Execute("UPDATE articles SET analysis_json=?,evidence_verified=1,ai_status='analyzed' WHERE id=?", Analysis("[]", "[]"), first);
+        Assert.True(db.ScalarInt("SELECT revision-completed_revision FROM article_group_state WHERE id=1") > 0);
+    }
+
+    [Fact]
     public void Duplicate_groups_need_canonical_url_or_matching_title_and_content()
     {
         using var fixture = DatabaseFixture.Create();
@@ -145,6 +170,7 @@ public sealed class ArticleGroupingTests
         InsertArticle(db, "Unrelated operations note", "Routine operations update.", "https://example.test/third", DateTimeOffset.UtcNow.AddMinutes(-10));
         db.Execute("UPDATE articles SET is_read=1 WHERE title='CVE-2026-13579 independent reporting'");
         Assert.Single(new ArticleGroupingService(db).Build(ReadArticles(db), "topics"));
+        new ArticleGroupingService(db).Reconcile();
         var page = new InboxModel(db, null!, new ArticleGroupingService(db)) { State = "unread", GroupView = "topics" };
 
         await page.OnGetAsync();

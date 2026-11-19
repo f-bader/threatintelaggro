@@ -80,6 +80,15 @@ public sealed class AppDatabase : IDisposable
                     group_key TEXT NOT NULL, article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
                     created_utc TEXT NOT NULL, PRIMARY KEY(group_key,article_id)
                 );
+                CREATE TABLE IF NOT EXISTS article_group_state (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, completed_revision INTEGER NOT NULL);
+                INSERT OR IGNORE INTO article_group_state(id,revision,completed_revision) VALUES(1,1,0);
+                CREATE TABLE IF NOT EXISTS article_group_cache (group_key TEXT PRIMARY KEY, group_type TEXT NOT NULL, fallback_label TEXT NOT NULL, reason TEXT NOT NULL, signature TEXT NOT NULL, members_json TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS article_group_identity (group_key TEXT PRIMARY KEY, members_json TEXT NOT NULL);
+                CREATE TRIGGER IF NOT EXISTS group_article_insert AFTER INSERT ON articles BEGIN UPDATE article_group_state SET revision=revision+1 WHERE id=1; END;
+                CREATE TRIGGER IF NOT EXISTS group_article_delete AFTER DELETE ON articles BEGIN UPDATE article_group_state SET revision=revision+1 WHERE id=1; END;
+                CREATE TRIGGER IF NOT EXISTS group_article_update AFTER UPDATE OF title,url,summary,published_utc,first_seen_utc,analysis_json,evidence_verified,ai_status ON articles BEGIN UPDATE article_group_state SET revision=revision+1 WHERE id=1; END;
+                CREATE TRIGGER IF NOT EXISTS group_exclusion_insert AFTER INSERT ON article_group_exclusions BEGIN UPDATE article_group_state SET revision=revision+1 WHERE id=1; END;
+                CREATE TRIGGER IF NOT EXISTS group_exclusion_delete AFTER DELETE ON article_group_exclusions BEGIN UPDATE article_group_state SET revision=revision+1 WHERE id=1; END;
                 CREATE TABLE IF NOT EXISTS briefing_follows (id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL CHECK(kind IN ('vendor','industry','product')),name TEXT NOT NULL,is_enabled INTEGER NOT NULL DEFAULT 1,is_custom INTEGER NOT NULL DEFAULT 0,UNIQUE(kind,name COLLATE NOCASE));
                 CREATE TABLE IF NOT EXISTS briefings (id INTEGER PRIMARY KEY AUTOINCREMENT,window_start_utc TEXT NOT NULL,window_end_utc TEXT NOT NULL,created_utc TEXT NOT NULL,title TEXT NOT NULL,executive_summary TEXT NOT NULL,detection_summary TEXT NOT NULL,ioc_summary TEXT NOT NULL,article_ids_json TEXT NOT NULL,article_snapshot_json TEXT NOT NULL,markdown TEXT NOT NULL,detections_snapshot_json TEXT,iocs_snapshot_json TEXT,UNIQUE(window_start_utc,window_end_utc));
                 CREATE INDEX IF NOT EXISTS ix_briefings_created ON briefings(created_utc DESC);
@@ -96,6 +105,7 @@ public sealed class AppDatabase : IDisposable
                 """);
             // Upgrade databases created by earlier local builds.
             foreach (var migration in new[] {
+                "ALTER TABLE article_group_state ADD COLUMN algorithm_version INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE feeds ADD COLUMN ioc_auto_approve INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE feeds ADD COLUMN source_type TEXT NOT NULL DEFAULT 'rss'",
                 "ALTER TABLE articles ADD COLUMN ai_status TEXT NOT NULL DEFAULT 'pending'",

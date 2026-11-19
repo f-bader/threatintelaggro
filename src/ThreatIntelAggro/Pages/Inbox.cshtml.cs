@@ -9,7 +9,7 @@ public sealed record InboxArticleGroup(ArticleGroup Group, IReadOnlyList<Diction
 
 [RequestSizeLimit(12_000_000)]
 [RequestFormLimits(MultipartBodyLengthLimit = 12_000_000)]
-public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleGroupingService? grouping = null, OpenAiArticleGroupNameGenerator? groupNames = null) : PageModel
+public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleGroupingService? grouping = null) : PageModel
 {
     public IReadOnlyList<Dictionary<string, string?>> Articles { get; private set; } = [];
     public IReadOnlyList<InboxArticleGroup> ArticleGroups { get; private set; } = [];
@@ -91,9 +91,7 @@ public class InboxModel(AppDatabase database, AnalysisService analyzer, ArticleG
         }
 
         var groupingArticles = database.Query($"{select} ORDER BY {ordering}");
-        var candidates = grouping.Build(groupingArticles, GroupView, ShowIgnoredGroups);
-        if (groupNames is not null)
-            candidates = await groupNames.EnsureNamesAsync(candidates, cancellationToken);
+        var candidates = grouping.ReadStored(groupingArticles, GroupView, ShowIgnoredGroups);
         var matchingById = matching.Where(article => long.TryParse(article.GetValueOrDefault("id"), out _))
             .ToDictionary(article => article["id"]!, article => article, StringComparer.Ordinal);
         var claimedArticleIds = new HashSet<string>(StringComparer.Ordinal);

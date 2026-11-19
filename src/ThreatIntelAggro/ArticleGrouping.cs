@@ -28,6 +28,52 @@ public sealed record ArticleGroup(
 
 public sealed class ArticleGroupingService(AppDatabase database)
 {
+    public const string ArticleColumns = "id,title,url,summary,published_utc,first_seen_utc,is_read,feed_title,ai_status,ai_error,analysis_json,source_ledger_json,screenshot_metadata_json,CASE WHEN screenshot_data_url IS NOT NULL THEN '1' ELSE '0' END AS has_screenshot,category,evidence_verified";
+
+    public IReadOnlyList<ArticleGroup> Reconcile()
+    {
+        var result = new List<ArticleGroup>();
+        database.Transaction(() =>
+        {
+            var revision = database.ScalarInt("SELECT revision FROM article_group_state WHERE id=1");
+            var articles = database.Query($"SELECT {ArticleColumns} FROM articles");
+            result.AddRange(Build(articles, "duplicates", true));
+            result.AddRange(Build(articles, "topics", true));
+            database.Execute("DELETE FROM article_group_cache");
+            foreach (var group in result)
+            {
+                database.Execute("INSERT INTO article_group_cache(group_key,group_type,fallback_label,reason,signature,members_json) VALUES(?,?,?,?,?,?)", group.Key, group.Type, group.FallbackLabel, group.Reason, group.Signature, JsonSerializer.Serialize(group.Members.Select(x => x.Article["id"])));
+                var previous = database.Query("SELECT members_json FROM article_group_identity WHERE group_key=?", group.Key).FirstOrDefault()?.GetValueOrDefault("members_json");
+                var ids = (previous is null ? [] : JsonSerializer.Deserialize<string[]>(previous) ?? []).Concat(group.Members.Select(x => x.Article["id"]!)).Distinct(StringComparer.Ordinal).ToArray();
+                database.Execute("INSERT INTO article_group_identity(group_key,members_json) VALUES(?,?) ON CONFLICT(group_key) DO UPDATE SET members_json=excluded.members_json", group.Key, JsonSerializer.Serialize(ids));
+            }
+            database.Execute("UPDATE article_group_state SET completed_revision=?,algorithm_version=1 WHERE id=1", revision);
+        });
+        return result;
+    }
+
+    public IReadOnlyList<ArticleGroup> ReadStored(IEnumerable<Dictionary<string, string?>> articles, string type, bool showIgnored = false)
+    {
+        var byId = articles.Where(x => x.GetValueOrDefault("id") is not null).ToDictionary(x => x["id"]!, StringComparer.Ordinal);
+        var saved = database.Query("SELECT group_key,generated_label,generated_signature,manual_label,ignored FROM article_group_overrides").ToDictionary(x => x["group_key"]!, StringComparer.Ordinal);
+        var excluded = database.Query("SELECT group_key,article_id FROM article_group_exclusions").Select(x => (x["group_key"], x["article_id"])).ToHashSet();
+        var result = new List<ArticleGroup>();
+        foreach (var row in database.Query("SELECT group_key,group_type,fallback_label,reason,signature,members_json FROM article_group_cache WHERE group_type=?", type == "topics" ? "topic" : "duplicate"))
+        {
+            var key = row["group_key"]!;
+            var setting = saved.GetValueOrDefault(key);
+            var ignored = setting?.GetValueOrDefault("ignored") == "1";
+            if (ignored && !showIgnored) continue;
+            var ids = JsonSerializer.Deserialize<string[]>(row["members_json"]!) ?? [];
+            var members = ids.Where(id => byId.ContainsKey(id) && !excluded.Contains((key, id))).Select(id => new ArticleGroupMember(byId[id])).ToArray();
+            if (members.Length < 2) continue;
+            var signature = row["signature"]!;
+            result.Add(new ArticleGroup(key, row["group_type"]!, row["fallback_label"]!, row["reason"]!, signature, members,
+                setting?.GetValueOrDefault("generated_signature") == signature ? setting.GetValueOrDefault("generated_label") : null,
+                setting?.GetValueOrDefault("manual_label"), ignored));
+        }
+        return result;
+    }
     private static readonly Regex VulnerabilityId = new(@"\bCVE-\d{4}-\d{4,}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex GhsaId = new(@"\bGHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex TrackingQuery = new(@"^(utm_.+|fbclid|gclid|ref|source)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -39,6 +85,22 @@ public sealed class ArticleGroupingService(AppDatabase database)
         type = type == "topics" ? "topics" : "duplicates";
         var all = articles.Select(ReadArticle).Where(article => article.Id > 0).ToArray();
         var candidates = type == "duplicates" ? BuildDuplicateCandidates(all) : BuildTopicCandidates(all);
+        // Title-based keys historically included the smallest member ID. Keep the old identity
+        // when a later reconciliation changes that anchor but retains the same group.
+        if (type == "duplicates")
+        {
+            var old = database.Query("SELECT group_key,members_json FROM article_group_identity WHERE group_key LIKE 'duplicate:title:%'")
+                .Select(row => (Key: row["group_key"]!, Ids: (JsonSerializer.Deserialize<string[]>(row["members_json"]!) ?? []).Select(ParseId).ToHashSet())).ToArray();
+            var exactKeys = candidates.Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
+            var used = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < candidates.Count; i++)
+            {
+                var candidate = candidates[i];
+                if (!candidate.Key.StartsWith("duplicate:title:", StringComparison.Ordinal) || old.Any(x => x.Key == candidate.Key)) continue;
+                var matches = old.Where(x => !exactKeys.Contains(x.Key) && !used.Contains(x.Key) && x.Ids.Intersect(candidate.MemberIds).Count() >= 2).ToArray();
+                if (matches.Length == 1) { candidates[i] = candidate with { Key = matches[0].Key }; used.Add(matches[0].Key); }
+            }
+        }
         var overrides = database.Query("SELECT group_key,generated_label,generated_signature,manual_label,ignored FROM article_group_overrides")
             .ToDictionary(row => row.GetValueOrDefault("group_key") ?? "", row => row, StringComparer.Ordinal);
         var exclusions = database.Query("SELECT group_key,article_id FROM article_group_exclusions")
@@ -255,6 +317,35 @@ public sealed class ArticleGroupingService(AppDatabase database)
     private sealed record Article(Dictionary<string, string?> Row, long Id, string Title, string Summary, string NormalizedTitle,
         DateTimeOffset? Date, string CanonicalUrl, (string Key, string Label, string Kind)[] Identifiers,
         (string Key, string Label)[] Campaigns, string[] References);
+}
+
+public sealed class ArticleGroupingWorker(AppDatabase database, ArticleGroupingService groups, OpenAiArticleGroupNameGenerator names, ILogger<ArticleGroupingWorker> log) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        do
+        {
+            try
+            {
+                if (database.ScalarInt("SELECT COUNT(*) FROM article_group_state WHERE revision<>completed_revision OR algorithm_version<>1") == 0) continue;
+                var candidates = groups.Reconcile();
+                foreach (var type in new[] { "duplicate", "topic" })
+                {
+                    var remaining = candidates.Where(x => x.Type == type && !x.Ignored && x.ManualLabel is null && x.GeneratedLabel is null).ToList();
+                    while (remaining.Count > 0)
+                    {
+                        var batch = remaining.Take(8).ToArray();
+                        var named = await names.EnsureNamesAsync(batch, stoppingToken);
+                        if (!named.Any(x => x.GeneratedLabel is not null)) break;
+                        remaining.RemoveRange(0, batch.Length);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+            catch (Exception ex) { log.LogError(ex, "Article grouping reconciliation failed; it will be retried."); }
+        } while (await timer.WaitForNextTickAsync(stoppingToken));
+    }
 }
 
 public sealed class OpenAiArticleGroupNameGenerator(IHttpClientFactory clients, IConfiguration configuration, ArticleGroupingService groups, ILogger<OpenAiArticleGroupNameGenerator> log)
