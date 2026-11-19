@@ -19,7 +19,7 @@ Planning baseline: 2026-11-13. This document describes the intended implementati
 
 ## 2. Architecture and dependency policy
 
-Use C# on .NET 10 LTS and ASP.NET Core Razor Pages. Server-rendered HTML, handwritten CSS, and small vanilla JavaScript modules provide filters, bulk actions, dialogs, clipboard copying, and status refreshes. Use system fonts and local assets; no CDN assets or JavaScript packages.
+Use C# on .NET 11 and ASP.NET Core Razor Pages. Server-rendered HTML, handwritten CSS, and small vanilla JavaScript modules provide filters, bulk actions, dialogs, clipboard copying, and status refreshes. Use system fonts and local assets; no CDN assets or JavaScript packages.
 
 Run one ASP.NET Core process in one container. Kestrel serves the UI; hosted `BackgroundService` implementations run the scheduler and durable job consumer. AI requests never run in page request handlers. The database owns job state; in-memory wake-up signals are an optimization only.
 
@@ -295,7 +295,7 @@ Owner-provided inputs can arrive during implementation: feed URLs, OpenAI API ke
 ## Sources checked while planning
 
 - [.NET support policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core)
-- [ASP.NET hosted background services](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services?view=aspnetcore-10.0)
+- [ASP.NET hosted background services](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services?view=aspnetcore-11.0)
 - [Microsoft.Data.Sqlite](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/)
 - [SQLite deployment fit](https://www.sqlite.org/whentouse.html)
 - [Official C# MCP SDK](https://github.com/modelcontextprotocol/csharp-sdk) and [HTTP transport](https://github.com/modelcontextprotocol/csharp-sdk/blob/main/docs/concepts/transports/transports.md)
