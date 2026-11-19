@@ -69,6 +69,7 @@ public sealed class AppDatabase : IDisposable
                     mitre_json TEXT NOT NULL DEFAULT '[]', telemetry_json TEXT NOT NULL DEFAULT '{}', references_json TEXT NOT NULL DEFAULT '[]', behaviors_json TEXT NOT NULL DEFAULT '[]', source_ids_json TEXT NOT NULL DEFAULT '[]', xdr_tactic TEXT NOT NULL DEFAULT '', xdr_techniques_json TEXT NOT NULL DEFAULT '[]',
                     status TEXT NOT NULL DEFAULT 'new', archived INTEGER NOT NULL DEFAULT 0, validation_state TEXT NOT NULL DEFAULT 'pending',
                     validation_json TEXT NOT NULL DEFAULT '{}', guid TEXT NOT NULL, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL,
+                    family_id TEXT, iteration_number INTEGER NOT NULL DEFAULT 0,
                     UNIQUE(article_id,local_key)
                 );
                 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -132,6 +133,11 @@ public sealed class AppDatabase : IDisposable
             foreach (var migration in new[] { "ALTER TABLE detections ADD COLUMN xdr_tactic TEXT NOT NULL DEFAULT ''", "ALTER TABLE detections ADD COLUMN xdr_techniques_json TEXT NOT NULL DEFAULT '[]'", "ALTER TABLE detections ADD COLUMN behaviors_json TEXT NOT NULL DEFAULT '[]'", "ALTER TABLE detections ADD COLUMN source_ids_json TEXT NOT NULL DEFAULT '[]'" })
             { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
             try { Exec("ALTER TABLE detections ADD COLUMN guid TEXT NOT NULL DEFAULT ''"); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { }
+            foreach (var migration in new[] {
+                "ALTER TABLE detections ADD COLUMN family_id TEXT",
+                "ALTER TABLE detections ADD COLUMN iteration_number INTEGER NOT NULL DEFAULT 0"
+            }) { try { Exec(migration); } catch (InvalidOperationException e) when (e.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) { } }
+            Exec("CREATE INDEX IF NOT EXISTS ix_detections_family ON detections(family_id,iteration_number)");
             foreach (var migration in new[] {
                 "ALTER TABLE analysis_responses ADD COLUMN requested_model TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE analysis_responses ADD COLUMN actual_model TEXT",

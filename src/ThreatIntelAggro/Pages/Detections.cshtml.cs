@@ -5,12 +5,16 @@ namespace ThreatIntelAggro.Pages;
 
 public sealed class DetectionsModel(AppDatabase database) : PageModel
 {
+    public sealed record FamilyMember(string Id, string Title, string ArticleTitle, int Iteration);
     public static System.Text.Json.Nodes.JsonArray Behaviors(string? json)
     {
         try { return System.Text.Json.Nodes.JsonNode.Parse(json ?? "[]") as System.Text.Json.Nodes.JsonArray ?? []; }
         catch (System.Text.Json.JsonException) { return []; }
     }
     public IReadOnlyList<Dictionary<string, string?>> Items { get; private set; } = [];
+    public IReadOnlyDictionary<long, IReadOnlyList<DetectionOverlap>> Overlaps { get; private set; } = new Dictionary<long, IReadOnlyList<DetectionOverlap>>();
+    public IReadOnlyDictionary<string, IReadOnlyList<FamilyMember>> Families { get; private set; } = new Dictionary<string, IReadOnlyList<FamilyMember>>();
+    public string? StatusMessage { get; private set; }
     [BindProperty(SupportsGet = true)] public string State { get; set; } = "active";
     [BindProperty(SupportsGet = true)] public long? ArticleId { get; set; }
     public string? FilterArticleTitle { get; private set; }
@@ -30,6 +34,57 @@ public sealed class DetectionsModel(AppDatabase database) : PageModel
     {
         database.Execute("UPDATE detections SET archived=0,updated_utc=? WHERE id=?", DateTimeOffset.UtcNow.ToString("O"), id);
         return RedirectToPage(new { state = returnState ?? "archived", articleId = ArticleId });
+    }
+    public IActionResult OnPostGroupAsIterations(long id, long relatedId, string? returnState)
+    {
+        if (id <= 0 || relatedId <= 0 || id == relatedId)
+        {
+            TempData["DetectionGroupingMessage"] = "Choose two different detection drafts to group.";
+            return RedirectToPage(new { state = returnState ?? "active", articleId = ArticleId });
+        }
+
+        var message = "These detections are now grouped as iterations.";
+        database.Transaction(() =>
+        {
+            var pair = database.Query("SELECT id,family_id,iteration_number,archived,created_utc FROM detections WHERE id IN (?,?) ORDER BY created_utc,id", id, relatedId);
+            if (pair.Count != 2 || pair.Any(x => x["archived"] != "0"))
+            {
+                message = "Both drafts must exist and be active before they can be grouped.";
+                return;
+            }
+            var leftFamily = pair[0]["family_id"];
+            var rightFamily = pair[1]["family_id"];
+            if (!string.IsNullOrEmpty(leftFamily) && !string.IsNullOrEmpty(rightFamily) && leftFamily != rightFamily)
+            {
+                message = "These drafts already belong to different iteration groups. Ungroup one first.";
+                return;
+            }
+
+            var familyId = leftFamily ?? rightFamily ?? Guid.NewGuid().ToString("N");
+            var nextIteration = database.ScalarInt("SELECT COALESCE(MAX(iteration_number),0)+1 FROM detections WHERE family_id=?", familyId);
+            foreach (var item in pair)
+            {
+                if (item["family_id"] == familyId) continue;
+                var iteration = nextIteration++;
+                database.Execute("UPDATE detections SET family_id=?,iteration_number=?,updated_utc=? WHERE id=? AND family_id IS NULL", familyId, iteration, DateTimeOffset.UtcNow.ToString("O"), item["id"]);
+            }
+        });
+        TempData["DetectionGroupingMessage"] = message;
+        if (message == "These detections are now grouped as iterations.") ArticleId = null;
+        return RedirectToPage(new { state = returnState ?? "active", articleId = ArticleId });
+    }
+    public IActionResult OnPostUngroup(long id, string? returnState)
+    {
+        database.Transaction(() =>
+        {
+            var familyId = database.Query("SELECT family_id FROM detections WHERE id=?", id).FirstOrDefault()?.GetValueOrDefault("family_id");
+            if (string.IsNullOrEmpty(familyId)) return;
+            database.Execute("UPDATE detections SET family_id=NULL,iteration_number=0,updated_utc=? WHERE id=?", DateTimeOffset.UtcNow.ToString("O"), id);
+            if (database.ScalarInt("SELECT COUNT(*) FROM detections WHERE family_id=?", familyId) <= 1)
+                database.Execute("UPDATE detections SET family_id=NULL,iteration_number=0 WHERE family_id=?", familyId);
+        });
+        TempData["DetectionGroupingMessage"] = "Detection removed from its iteration group.";
+        return RedirectToPage(new { state = returnState ?? "active", articleId = ArticleId });
     }
     public IActionResult OnPostDelete(long id)
     {
@@ -60,9 +115,19 @@ public sealed class DetectionsModel(AppDatabase database) : PageModel
     }
     private void Load()
     {
+        StatusMessage = TempData["DetectionGroupingMessage"] as string;
         var clauses = new List<string> { State == "archived" ? "d.archived=1" : "d.archived=0" };
         var args = new List<object?>();
         if (ArticleId is > 0) { clauses.Add("d.article_id=?"); args.Add(ArticleId.Value); FilterArticleTitle = database.Query("SELECT title FROM articles WHERE id=?", ArticleId.Value).FirstOrDefault()?.GetValueOrDefault("title"); }
         Items = database.Query($"SELECT d.*,a.title AS article_title,a.url AS article_url FROM detections d JOIN articles a ON a.id=d.article_id WHERE {string.Join(" AND ", clauses)} ORDER BY d.created_utc DESC", args.ToArray());
+        var allVisible = database.Query($"SELECT d.*,a.title AS article_title,a.url AS article_url FROM detections d JOIN articles a ON a.id=d.article_id WHERE d.archived=? ORDER BY d.created_utc DESC", State == "archived" ? 1 : 0);
+        var overlapMap = new Dictionary<long, IReadOnlyList<DetectionOverlap>>();
+        foreach (var item in Items)
+            if (long.TryParse(item["id"], out var id)) overlapMap[id] = DetectionOverlapMatcher.FindCandidates(item, allVisible);
+        Overlaps = overlapMap;
+        Families = allVisible.Where(x => !string.IsNullOrEmpty(x["family_id"]))
+            .GroupBy(x => x["family_id"]!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<FamilyMember>)g.OrderBy(x => int.TryParse(x["iteration_number"], out var order) ? order : int.MaxValue)
+                .Select(x => new FamilyMember(x["id"] ?? "", x["alert_title"] ?? "Detection", x["article_title"] ?? "", int.TryParse(x["iteration_number"], out var iteration) ? iteration : 0)).ToArray(), StringComparer.Ordinal);
     }
 }

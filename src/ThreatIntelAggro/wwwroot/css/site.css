@@ -690,6 +690,22 @@ h2 { margin: 3px 0 0; color: #dbe2e9; font: 700 16px var(--sans); letter-spacing
 .detection-card h3 { margin: 8px 0 5px; color: #e0e6ec; font: 600 15px var(--sans); }
 .detection-card p { margin: 8px 0; }
 .detection-card a { color: #91d1dc; }
+.detection-iteration-pill { padding: 2px 6px; border: 1px solid #45626a; color: #a4dce2; background: #102027; }
+.detection-family,.detection-overlaps { min-width: 0; margin: 11px 0; padding: 10px 12px; border: 1px solid #354b54; background: #0c151a; }
+.detection-overlaps { border-color: #48513d; background: #121710; }
+.detection-family>div:first-child,.detection-overlaps>div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px 12px; }
+.detection-family>div:first-child strong,.detection-overlaps>div:first-child strong { color: #a5dbe1; font: 9px var(--mono); letter-spacing: .8px; }
+.detection-overlaps>div:first-child strong { color: #c7d99c; }
+.detection-family>div:first-child span,.detection-overlaps>div:first-child span { color: #83919b; font: 9px var(--mono); }
+.detection-family ol,.detection-overlaps ul { display: grid; gap: 6px; margin: 8px 0; padding: 0; list-style: none; }
+.detection-family li,.detection-overlaps li { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 6px; border-top: 1px solid #26343b; }
+.detection-family li.current { border-left: 2px solid var(--accent); padding-left: 7px; }
+.detection-family li>a,.detection-overlaps li>div>a { min-width: 0; overflow-wrap: anywhere; }
+.detection-family li small,.detection-overlaps li small { display: block; margin-top: 2px; color: #7f8d98; font: 8px/1.45 var(--mono); overflow-wrap: anywhere; }
+.detection-family form,.detection-overlaps form { flex: 0 0 auto; margin: 0; }
+.detection-overlaps li>div { min-width: 0; }
+.detection-family-message { margin: 10px 12px 0; padding: 9px 12px; border: 1px solid #35525a; background: #0e1b20; color: #b1dce0; font: 9px/1.5 var(--mono); }
+@media (max-width:650px) { .detection-family li,.detection-overlaps li { align-items: flex-start; flex-direction: column; } .detection-family form,.detection-overlaps form,.detection-family form button,.detection-overlaps form button { width: 100%; } }
 .detection-actions>a { display: inline-flex; align-items: center; text-decoration: none; }
 .detection-actions { padding-top: 10px; border-top: 1px solid #29333d; }
 .detection-actions form { display: flex; gap: 5px; margin: 0; }
