@@ -9,6 +9,11 @@ The app includes RSS/Atom feed management and OPML import, scheduled polling, ar
 
 Selected direction: C# / ASP.NET Core Razor Pages, SQLite, server-rendered HTML, handwritten CSS, and small vanilla JavaScript modules. No Python, Node.js, npm, frontend build pipeline, or Cloudflare dependency.
 
+> [!WARNING]
+> **Threat Intel Aggro has no built-in user authentication.** Before exposing it beyond localhost, configure an authenticating reverse proxy such as NGINX to protect the web UI and `/internal/*`. Keep the application port inaccessible to untrusted clients so they cannot reach the app directly. The IOC API key and the secret briefing RSS URL protect only their respective endpoints.
+>
+> See [NGINX reverse proxy](#nginx-reverse-proxy) for deployment and verification details.
+
 Run locally with `DOTNET_CLI_HOME="$PWD/.dotnet-cli" dotnet restore src/ThreatIntelAggro/ThreatIntelAggro.csproj`, then `AGGRO_DATA_DIR="$PWD/.local-data" DOTNET_CLI_HOME="$PWD/.dotnet-cli" dotnet run --project src/ThreatIntelAggro`. Open [http://localhost:5088](http://localhost:5088). The seeded Unit 42 feed is `https://unit42.paloaltonetworks.com/feed/` and imports entries from the last 14 days that the feed exposes. Build the source container locally with `docker compose -f compose.yaml -f compose.dev.yaml up --build`.
 
 The deployment Compose file pulls the released image from GitHub Container Registry. See [release and repository setup](docs/RELEASING.md) for release tags, image tags, and the required PR/CI ruleset.
