@@ -67,7 +67,7 @@ Inbox is the default start page and first workspace tab; Briefings is the second
 
 The background scheduler defaults to 06:00 UTC, backfills missed daily windows, and waits for in-progress article analyses before closing a window. It does not create a briefing when no followed vendor, industry, or product matches an analyzed article. A briefing includes an AI-written executive summary, clean links to applicable articles with matched vendor/industry/product names, relevant unarchived detections with descriptions, and a deduplicated IOC overview with defanged values, types, and classifications. The system prompt is editable in Settings; clearing it and saving restores the displayed default. Generation uses the configured AI model. Settings also provide manual generation and a schedule enable/disable control.
 
-Each briefing is archived. Markdown and light-design PDF downloads are available. Settings can generate or rotate a full-archive RSS URL at `/briefings/rss/<random-id>`. The random ID is stored as a hash and shown only once; treat the URL as a secret. The RSS endpoint is unauthenticated at the app layer for feed readers, but its random ID is required. When the deployment proxy normally requires sign-in, exempt only `/briefings/rss/*` from that sign-in rule; keep `/`, `/Settings`, `/Inbox`, `/briefings/<id>`, and the other UI routes protected. Verify that missing or invalid RSS IDs return 404.
+Each briefing is archived. Markdown and light-design PDF downloads are available. Settings can generate or rotate a full-archive RSS URL at `/briefings/rss/<random-id>`. The random ID is stored as a hash and shown only once; treat the URL as a secret. The RSS endpoint is unauthenticated at the app layer for feed readers, but its random ID is required. It sends `Cache-Control: no-store` to prevent compliant HTTP caches from storing the feed. When the deployment proxy normally requires sign-in, exempt only `/briefings/rss/*` from that sign-in rule; keep `/`, `/Settings`, `/Inbox`, `/briefings/<id>`, and the other UI routes protected. Verify that missing or invalid RSS IDs return 404.
 
 Detections have JSON and KQL downloads. XDRConverter YAML is generated with a YAML serializer and checked against the [XDRConverter schema](https://github.com/f-bader/XDRConverter) pinned at commit `9c60aa8b653e89bf68ef4c318a92c1b62efe958b`. A supported ATT&CK tactic is required for YAML export; older drafts without one can still be downloaded as KQL or JSON. KQL validation uses the XDR Internals MCP service when available. Review the validation status and source evidence before using a draft; evidence matching does not establish that the detection is correct. Exported rules default to disabled.
 
@@ -111,7 +111,11 @@ curl -H "Authorization: Bearer $AGGRO_API_KEY" \
 
 ### NGINX reverse proxy
 
+Each app instance allows 120 IOC API requests and 30 briefing RSS requests per minute per client IP. The endpoints have separate budgets. Excess requests receive HTTP 429 with a `Retry-After` header. Clients that share an IP also share that endpoint's budget.
+
 Compose publishes the app on host loopback only (`127.0.0.1:5088`). NGINX should forward `X-Forwarded-For` and `X-Forwarded-Proto`. Set `AGGRO_TRUSTED_PROXY_IPS` in the Compose `.env` file to the address of the proxy as seen from inside the app container; when NGINX runs on the host, this is often the Docker bridge gateway. The app trusts one forwarded-header hop and ignores forwarded headers from all addresses that are not explicitly listed. Leave the setting empty when no trusted proxy is configured, and do not use a broad subnet or `0.0.0.0`.
+
+Configure the trusted proxy and have it set the client IP for per-client rate limits. Without trusted forwarding, requests arriving through the same proxy share one budget per endpoint.
 
 To find the bridge gateway, inspect the Compose network with `docker network inspect <network-name>` and use its `Gateway` address. For example:
 

@@ -1,7 +1,12 @@
+using System.Globalization;
+using System.Threading.RateLimiting;
 using ThreatIntelAggro;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
-using System.Net;
+using Microsoft.AspNetCore.RateLimiting;
+
+const string IocRateLimit = "ioc-api";
+const string RssRateLimit = "briefing-rss";
 
 if (args.Length > 0 && args[0] == "--restore-backup")
 {
@@ -17,6 +22,18 @@ builder.Services.AddRazorPages(options => options.Conventions.AddPageRoute("/Inb
 var trustedProxyIps = (builder.Configuration["AGGRO_TRUSTED_PROXY_IPS"] ?? "")
     .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 builder.Services.Configure<ForwardedHeadersOptions>(options => ForwardedProxyPolicy.Configure(options, trustedProxyIps));
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(IocRateLimit, context => LimitPerClient(context, 120));
+    options.AddPolicy(RssRateLimit, context => LimitPerClient(context, 30));
+    options.OnRejected = (context, _) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter = Math.Max(1, Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+        return ValueTask.CompletedTask;
+    };
+});
 var dataDirectory = Environment.GetEnvironmentVariable("AGGRO_DATA_DIR") ?? Path.Combine(builder.Environment.ContentRootPath, "App_Data");
 Directory.CreateDirectory(Path.Combine(dataDirectory, "keys"));
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDirectory, "keys")));
@@ -84,6 +101,7 @@ app.Use(async (context, next) =>
 });
 app.UseStaticFiles();
 app.UseRouting();
+app.UseRateLimiter();
 app.Use(async (context, next) =>
 {
     if (context.Request.Path.StartsWithSegments("/api"))
@@ -105,8 +123,9 @@ app.MapGet("/health", (AppDatabase database) =>
     try { database.ScalarInt("SELECT COUNT(*) FROM feeds"); return Results.Ok(new { status = "healthy" }); }
     catch { return Results.StatusCode(503); }
 });
-app.MapGet("/briefings/rss/{token}", (string token, HttpRequest request, AppDatabase database, BriefingService briefings) =>
+app.MapGet("/briefings/rss/{token}", (string token, HttpRequest request, HttpResponse response, AppDatabase database, BriefingService briefings) =>
 {
+    response.Headers.CacheControl = "no-store";
     var expected = IocExclusionSettings.Get(database, "briefing_rss_hash") ?? "";
     var supplied = BriefingService.HashFeedId(token);
     if (expected.Length != supplied.Length || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(expected), System.Text.Encoding.ASCII.GetBytes(supplied))) return Results.NotFound();
@@ -118,7 +137,7 @@ app.MapGet("/briefings/rss/{token}", (string token, HttpRequest request, AppData
         if (item.GetValueOrDefault("iocs_snapshot_json") is null) item["iocs_snapshot_json"] = System.Text.Json.JsonSerializer.Serialize(briefings.GetIocs(item));
     }
     return Results.Text(BriefingService.BuildRss(baseUrl, items), "application/rss+xml; charset=utf-8");
-});
+}).RequireRateLimiting(RssRateLimit);
 app.MapGet("/internal/manual-jobs/{key}", (string key, ManualJobs jobs, HttpResponse response) =>
 {
     response.Headers.CacheControl = "no-store";
@@ -137,6 +156,18 @@ app.MapGet("/api/iocs", (HttpRequest request, AppDatabase database) =>
     var includeUnapproved = bool.TryParse(request.Query["includeUnapproved"].FirstOrDefault(), out var include) && include;
     var items = IocIndex.Read(database, days, vendor, industry, type, search, includeUnapproved: includeUnapproved, classification: classification);
     return Results.Json(new { generatedUtc = DateTimeOffset.UtcNow, query = new { days, vendor, industry, type, search, classification, includeUnapproved }, count = items.Count, items });
-});
+}).RequireRateLimiting(IocRateLimit);
 app.MapRazorPages();
 app.Run();
+
+static RateLimitPartition<string> LimitPerClient(HttpContext context, int permitLimit)
+{
+    var address = context.Connection.RemoteIpAddress;
+    if (address?.IsIPv4MappedToIPv6 == true) address = address.MapToIPv4();
+    return RateLimitPartition.GetFixedWindowLimiter(address?.ToString() ?? "", _ => new FixedWindowRateLimiterOptions
+    {
+        PermitLimit = permitLimit,
+        Window = TimeSpan.FromMinutes(1),
+        QueueLimit = 0
+    });
+}
