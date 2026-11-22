@@ -7,24 +7,37 @@ using System.Text.RegularExpressions;
 
 namespace ThreatIntelAggro;
 
-public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, ILogger<FeedReader> log, GitHubAdvisoryReader? githubAdvisories = null)
+public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, ILogger<FeedReader> log, GitHubAdvisoryReader? githubAdvisories = null, HomeFeedRoute? homeRoute = null)
 {
+    public Task<bool> CheckHomeRouteAsync(CancellationToken cancellationToken) =>
+        homeRoute?.CheckAvailabilityAsync(cancellationToken) ?? Task.FromResult(false);
+
     public async Task<int> RefreshAsync(long feedId, CancellationToken cancellationToken = default)
     {
-        var feed = database.Query("SELECT id,title,url,interval_hours,source_type FROM feeds WHERE id=? AND enabled=1", feedId).FirstOrDefault();
+        var feed = database.Query("SELECT id,title,url,interval_hours,source_type,fetch_route FROM feeds WHERE id=? AND enabled=1", feedId).FirstOrDefault();
         if (feed is null) return 0;
         var url = feed["url"]!;
         try
         {
+            var route = feed["fetch_route"] == "default" ? HomeFeedRoute.DefaultRoute(database) : feed["fetch_route"];
+            var selectedHomeRoute = route == "home"
+                ? homeRoute ?? throw new InvalidOperationException("Home exit node is not configured.")
+                : null;
             if (feed.GetValueOrDefault("source_type") == "github")
             {
-                var count = await (githubAdvisories ?? throw new InvalidOperationException("GitHub advisory collection is not configured."))
+                var advisor = selectedHomeRoute?.CreateGitHubReader() ?? githubAdvisories
+                    ?? throw new InvalidOperationException("GitHub advisory collection is not configured.");
+                var count = await advisor
                     .RefreshAsync(database, feedId, feed["title"] ?? "GitHub advisories", url, cancellationToken);
                 database.Execute("UPDATE feeds SET last_checked_utc=?,last_error=NULL WHERE id=?", DateTimeOffset.UtcNow.ToString("O"), feedId);
                 log.LogInformation("GitHub advisory source {FeedId} refresh found {ArticleCount} new entries", feedId, count);
                 return count;
             }
-            var bytes = await fetcher.GetAsync(url, 10 * 1024 * 1024, TimeSpan.FromSeconds(25), cancellationToken);
+            var timeout = TimeSpan.FromSeconds(25);
+            const int maxBytes = 10 * 1024 * 1024;
+            var bytes = selectedHomeRoute is not null
+                ? await selectedHomeRoute.GetAsync(url, maxBytes, timeout, cancellationToken)
+                : await fetcher.GetAsync(url, maxBytes, timeout, cancellationToken);
             using var text = new StringReader(CleanXmlCharacters(DecodeXml(bytes)));
             using var reader = XmlReader.Create(text, new XmlReaderSettings
             {

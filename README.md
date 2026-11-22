@@ -24,6 +24,43 @@ This keeps the existing database and other volume contents. For a bind mount ins
 
 OpenAI is the primary AI provider. Azure OpenAI is an optional provider with explicit capability checks. Public source research and KQL assistance/validation use bounded tools; the MCP endpoint is `https://mcp.xdrinternals.com`.
 
+### Optional Tailscale route for feeds
+
+Set up and approve a home Tailscale exit node. On the Docker host, make
+`/dev/net/tun` available and set these variables in the existing Compose `.env`
+file or deployment secret environment:
+
+- `AGGRO_TAILSCALE_EXIT_NODE` is the approved exit node's Tailscale IP address.
+- `AGGRO_TAILSCALE_AUTHKEY` enrolls the new sidecar on first startup. Keep it private. The deployment retains the node identity in the `tailscale-feed-state` volume.
+
+Start the app with an image containing this feature:
+
+```sh
+docker compose -f compose.yaml -f compose.tailscale.yaml up -d
+```
+
+To build the app from this checkout, insert `-f compose.dev.yaml` before the
+Tailscale overlay and add `--build` to `up -d`.
+
+Open **Feeds → Edit** and select **Home exit node** for any feed. Choose
+**Default** to follow **Settings → Feed routing**, or **Direct (VPS)** to
+override the default. New and imported feeds inherit the default. Existing
+explicit route choices are preserved. The initial default is **Direct (VPS)**.
+
+The app checks availability by opening a short test tunnel through the proxy.
+It only offers new home-route selections when the check succeeds. If a selected
+route becomes unavailable, manual and scheduled collection report the failure
+without retrying over the VPS. The route applies to RSS/Atom and GitHub advisory
+collection. Article analysis and downloads keep using their own clients.
+
+The overlay publishes no proxy port. Squid accepts CONNECT only from the
+private app bridge and blocks private and special-use destinations. The app
+validates the DNS answers and sends a public IP to the proxy, keeping the
+original hostname for HTTP and TLS. Use a different subnet in both
+`compose.tailscale.yaml` and `deploy/feed-proxy.conf` if `172.30.181.0/24`
+overlaps an existing network. Before removing the overlay, change the default
+and any home-route overrides to **Direct (VPS)** if those feeds should keep polling.
+
 ## Daily threat briefings
 
 Inbox is the default start page and first workspace tab; Briefings is the second tab. In Settings, follow affected vendors and industries from analyzed article metadata or add custom names. Entries can be disabled without removing them. Briefings match analyzed articles in the previous 24-hour UTC window using normalized and conservative fuzzy matching, and preserve each match in the archived snapshot.

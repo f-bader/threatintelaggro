@@ -1,0 +1,49 @@
+services:
+  threat-intel-aggro:
+    environment:
+      AGGRO_HOME_FEED_PROXY: http://tailscale-egress:3129
+    networks:
+      default: {}
+      feed-proxy: {}
+
+  tailscale-egress:
+    image: tailscale/tailscale:latest
+    environment:
+      TS_AUTHKEY: ${AGGRO_TAILSCALE_AUTHKEY:-}
+      TS_AUTH_ONCE: "true"
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      TS_ACCEPT_DNS: "true"
+      TS_EXTRA_ARGS: "--exit-node=${AGGRO_TAILSCALE_EXIT_NODE:?Set AGGRO_TAILSCALE_EXIT_NODE} --exit-node-allow-lan-access=true"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - tailscale-feed-state:/var/lib/tailscale
+    networks:
+      - feed-proxy
+      - tailscale-uplink
+    restart: unless-stopped
+
+  feed-proxy:
+    image: ubuntu/squid:latest
+    network_mode: service:tailscale-egress
+    volumes:
+      - ./deploy/feed-proxy.conf:/etc/squid/squid.conf:ro
+    depends_on:
+      tailscale-egress:
+        condition: service_started
+        restart: true
+    restart: unless-stopped
+
+networks:
+  feed-proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.181.0/24
+  tailscale-uplink: {}
+
+volumes:
+  tailscale-feed-state:

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Reflection;
@@ -21,6 +22,86 @@ public sealed class DatabaseChecksCollection;
 [Collection("Database checks")]
 public sealed class MediumFindingsTests
 {
+    [Fact]
+    public async Task FeedDefaultAndExplicitOverridesNeverFallBackWhenHomeRouteIsUnavailable()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        const string url = "https://feeds.example.test/rss.xml";
+        db.Execute("INSERT INTO feeds(title,url,created_utc) VALUES(?,?,?)", "Fixture", url, DateTimeOffset.UtcNow.ToString("O"));
+
+        var directRequests = 0;
+        using var direct = new SafePublicFetcher(new StaticResponseHandler(_ =>
+        {
+            directRequests++;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<rss><channel/></rss>") };
+        }));
+        var reader = new FeedReader(direct, db, NullLogger<FeedReader>.Instance);
+        var page = new FeedsModel(db, reader);
+        page.OnGet();
+        Assert.Equal("default", page.Feeds.Single()["fetch_route"]);
+        Assert.Equal("direct", page.DefaultFetchRoute);
+
+        await page.OnPostEditAsync(1, "Fixture", 6, url, false, default, "home");
+        Assert.Equal("default", db.Query("SELECT fetch_route FROM feeds WHERE id=1").Single()["fetch_route"]);
+
+        IocExclusionSettings.Set(db, HomeFeedRoute.DefaultSetting, "home");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => reader.RefreshAsync(1));
+        Assert.Equal(0, directRequests);
+        Assert.Contains("Home exit node", db.Query("SELECT last_error FROM feeds WHERE id=1").Single()["last_error"]!);
+
+        await page.OnPostEditAsync(1, "Fixture", 6, url, false, default, "direct");
+        Assert.Equal("direct", db.Query("SELECT fetch_route FROM feeds WHERE id=1").Single()["fetch_route"]);
+        Assert.Equal(0, await reader.RefreshAsync(1));
+        Assert.Equal(1, directRequests);
+        Assert.Null(db.Query("SELECT last_error FROM feeds WHERE id=1").Single()["last_error"]);
+    }
+
+    [Fact]
+    public async Task HomeFeedRouteChecksTheProxyPinsTheAddressAndBlocksPrivateRedirects()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var route = new HomeFeedRoute(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["AGGRO_HOME_FEED_PROXY"] = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}"
+        }).Build());
+        var proxy = ServeAsync();
+
+        Assert.True(await route.CheckAvailabilityAsync(deadline.Token));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            route.GetAsync("http://1.1.1.1/feed", 1024, TimeSpan.FromSeconds(4), deadline.Token));
+        Assert.Contains("Private", exception.Message);
+        await proxy;
+        Assert.False(listener.Pending());
+
+        async Task ServeAsync()
+        {
+            for (var index = 0; index < 2; index++)
+            {
+                using var client = await listener.AcceptTcpClientAsync(deadline.Token);
+                await using var stream = client.GetStream();
+                using var input = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+                using var output = new StreamWriter(stream, Encoding.ASCII, leaveOpen: true) { NewLine = "\r\n", AutoFlush = true };
+                Assert.Equal(index == 0 ? "CONNECT 1.1.1.1:443 HTTP/1.1" : "CONNECT 1.1.1.1:80 HTTP/1.1",
+                    await input.ReadLineAsync(deadline.Token));
+                await ReadHeadersAsync();
+                await output.WriteAsync("HTTP/1.1 200 Connection established\r\n\r\n");
+
+                if (index == 0) continue;
+                Assert.Equal("GET /feed HTTP/1.1", await input.ReadLineAsync(deadline.Token));
+                await ReadHeadersAsync();
+                await output.WriteAsync("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/feed\r\nContent-Length: 0\r\n\r\n");
+
+                async Task ReadHeadersAsync()
+                {
+                    while (await input.ReadLineAsync(deadline.Token) is { Length: > 0 }) { }
+                }
+            }
+        }
+    }
+
     [Fact]
     public async Task FeedRefreshRemovesXmlInvalidCharactersAndImportsEntries()
     {

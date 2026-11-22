@@ -7,6 +7,26 @@
 @if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
 <section class="panel diagnostics-settings-panel"><div class="panel-head"><div><div class="eyebrow">LOCAL INTERFACE</div><h2>Diagnostics</h2></div><span class="api-key-status @(Model.DiagnosticsVisible ? "is-active" : "is-missing")">@(Model.DiagnosticsVisible ? "VISIBLE" : "HIDDEN")</span></div><form method="post" asp-page-handler="SaveDiagnosticsVisibility" class="diagnostics-settings-form"><label><input asp-for="DiagnosticsVisibleInput" type="checkbox"/><span><strong>Show the Diagnostics tab</strong><small>When enabled, the tab displays recent failed analysis and briefing stages with their captured output.</small></span></label><button class="button button-secondary" type="submit">SAVE DISPLAY SETTING</button></form></section>
 <section class="panel inbox-defaults-panel"><div class="panel-head"><div><div class="eyebrow">LOCAL INTERFACE</div><h2>Inbox defaults</h2></div></div><form method="post" asp-page-handler="SaveInboxDefaults" class="inbox-defaults-form"><label>Default coverage view<select asp-for="DefaultCoverageViewInput"><option value="articles">All articles</option><option value="duplicates">Duplicate groups</option><option value="topics">Topic groups</option></select><small>Used when opening the inbox without an explicit coverage view in the URL.</small></label><button class="button button-secondary" type="submit">SAVE INBOX DEFAULT</button></form></section>
+@{
+    var defaultFeedRoute = Model.DefaultFetchRoute;
+    var homeRouteAvailable = await Model.CheckHomeRouteAsync(ViewContext.HttpContext.RequestAborted);
+}
+<section class="panel">
+    <div class="panel-head">
+        <h2>Feed routing</h2>
+        <span class="api-key-status @(homeRouteAvailable ? "is-active" : "is-missing")">@(homeRouteAvailable ? "HOME EXIT NODE AVAILABLE" : "HOME EXIT NODE UNAVAILABLE")</span>
+    </div>
+    <form method="post" asp-page-handler="SaveFeedRoute" class="inbox-defaults-form feed-default-form">
+        <label>Default feed route
+            <select name="route">
+                <option value="direct" selected="@(defaultFeedRoute == "direct")">Direct (VPS)</option>
+                <option value="home" selected="@(defaultFeedRoute == "home")" disabled="@(!homeRouteAvailable)">Home exit node</option>
+            </select>
+        </label>
+        <button class="button button-secondary" type="submit">Save feed default</button>
+        <p class="form-footnote">Applies to feeds using the default route. Individual feeds can override it.</p>
+    </form>
+</section>
 <section class="panel briefing-settings-panel"><div class="panel-head"><div><div class="eyebrow">DAILY INTELLIGENCE</div><h2>Threat briefing</h2></div><span class="api-key-status @(Model.BriefingEnabled ? "is-active" : "is-missing")">@(Model.BriefingEnabled ? "SCHEDULED" : "PAUSED")</span></div>
 <form method="post" asp-page-handler="SaveBriefing" class="briefing-settings-form"><label class="briefing-enable"><input asp-for="BriefingEnabledInput" type="checkbox"/><span>Enable daily briefing generation</span></label><label>Generation time · UTC<input asp-for="BriefingTimeInput" type="time" required/></label><label class="briefing-prompt-label">Generation system prompt<textarea asp-for="BriefingPromptInput" rows="7" maxlength="10000"></textarea><small>Used for future generations. Leave blank and save to restore the default. Article content is treated as untrusted evidence.</small></label><button class="button button-primary" type="submit">SAVE BRIEFING SETTINGS</button></form>
 <div class="briefing-follow-controls" id="briefing-follows">

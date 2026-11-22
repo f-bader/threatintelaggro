@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace ThreatIntelAggro.Pages;
 
-public sealed class SettingsModel(AppDatabase database, AiModelSettingsService aiModelSettings, IConfiguration configuration, IHttpClientFactory httpClientFactory, BriefingService briefings) : PageModel
+public sealed class SettingsModel(AppDatabase database, AiModelSettingsService aiModelSettings, IConfiguration configuration, IHttpClientFactory httpClientFactory, BriefingService briefings, HomeFeedRoute? homeRoute = null) : PageModel
 {
     public IReadOnlyList<Dictionary<string, string?>> BriefingFollows { get; private set; } = [];
     public IReadOnlyList<string> AvailableBriefingVendors { get; private set; } = [];
@@ -56,6 +56,28 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
     [BindProperty] public int OtherExpiryDays { get; set; } = ExpirySettings.DefaultOtherDays;
     [TempData] public string? Notice { get; set; }
     [TempData] public string? GeneratedApiKey { get; set; }
+
+    public string DefaultFetchRoute => HomeFeedRoute.DefaultRoute(database);
+
+    public Task<bool> CheckHomeRouteAsync(CancellationToken cancellationToken) =>
+        homeRoute?.CheckAvailabilityAsync(cancellationToken) ?? Task.FromResult(false);
+
+    public async Task<IActionResult> OnPostSaveFeedRouteAsync(string? route, CancellationToken cancellationToken)
+    {
+        if (route is not ("direct" or "home"))
+        {
+            Notice = "Select a valid default feed route.";
+            return RedirectToPage();
+        }
+        if (route == "home" && !await CheckHomeRouteAsync(cancellationToken))
+        {
+            Notice = "The home exit node is unavailable. Check the Tailscale sidecar and proxy.";
+            return RedirectToPage();
+        }
+        IocExclusionSettings.Set(database, HomeFeedRoute.DefaultSetting, route);
+        Notice = "Default feed route saved.";
+        return RedirectToPage();
+    }
 
     public void OnGet()
     {

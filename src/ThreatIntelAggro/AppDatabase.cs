@@ -26,7 +26,7 @@ public sealed class AppDatabase : IDisposable
                 CREATE TABLE IF NOT EXISTS feeds (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, url TEXT NOT NULL UNIQUE,
                     interval_hours INTEGER NOT NULL DEFAULT 6, enabled INTEGER NOT NULL DEFAULT 1, ioc_auto_approve INTEGER NOT NULL DEFAULT 0,
-                    source_type TEXT NOT NULL DEFAULT 'rss',
+                    source_type TEXT NOT NULL DEFAULT 'rss', fetch_route TEXT NOT NULL DEFAULT 'default',
                     last_checked_utc TEXT, last_error TEXT, created_utc TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS articles (
@@ -108,6 +108,7 @@ public sealed class AppDatabase : IDisposable
                 "ALTER TABLE article_group_state ADD COLUMN algorithm_version INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE feeds ADD COLUMN ioc_auto_approve INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE feeds ADD COLUMN source_type TEXT NOT NULL DEFAULT 'rss'",
+                "ALTER TABLE feeds ADD COLUMN fetch_route TEXT NOT NULL DEFAULT 'default'",
                 "ALTER TABLE articles ADD COLUMN ai_status TEXT NOT NULL DEFAULT 'pending'",
                 "ALTER TABLE articles ADD COLUMN ai_error TEXT",
                 "ALTER TABLE articles ADD COLUMN content_text TEXT NOT NULL DEFAULT ''",
@@ -198,7 +199,7 @@ public sealed class AppDatabase : IDisposable
     {
         lock (_gate)
         {
-            Execute("INSERT OR IGNORE INTO feeds(title,url,interval_hours,enabled,created_utc) VALUES(?,?,?,?,?)",
+            Execute("INSERT OR IGNORE INTO feeds(title,url,interval_hours,enabled,created_utc,fetch_route) VALUES(?,?,?,?,?,'default')",
                 "Unit 42", "https://unit42.paloaltonetworks.com/feed/", 6, 1, DateTimeOffset.UtcNow.ToString("O"));
         }
     }

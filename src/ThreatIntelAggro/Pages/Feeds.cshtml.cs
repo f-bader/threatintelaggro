@@ -23,6 +23,9 @@ public class FeedsModel(AppDatabase database, FeedReader reader, ManualJobs? job
     [BindProperty(SupportsGet = true)] public string IocApproval { get; set; } = "all";
     [BindProperty(SupportsGet = true)] public string Sort { get; set; } = "name";
     [BindProperty(SupportsGet = true)] public string Direction { get; set; } = "asc";
+    public string DefaultFetchRoute => HomeFeedRoute.DefaultRoute(database);
+    public Task<bool> CheckHomeRouteAsync(CancellationToken cancellationToken) => reader.CheckHomeRouteAsync(cancellationToken);
+
     public int TotalFeedCount { get; private set; }
 
     public ManualJobStatus? RefreshStatus(long id) => jobs?.Status(ManualJobs.FeedKey(id));
@@ -46,7 +49,7 @@ public class FeedsModel(AppDatabase database, FeedReader reader, ManualJobs? job
         if (!new[] { 3, 6, 12, 24 }.Contains(IntervalHours)) IntervalHours = 6;
         try
         {
-            database.Execute("INSERT INTO feeds(title,url,interval_hours,enabled,ioc_auto_approve,created_utc) VALUES(?,?,?,?,?,?)", Title, uri.ToString(), IntervalHours, 1, IocAutoApprove, DateTimeOffset.UtcNow.ToString("O"));
+            database.Execute("INSERT INTO feeds(title,url,interval_hours,enabled,ioc_auto_approve,created_utc,fetch_route) VALUES(?,?,?,?,?,?,'default')", Title, uri.ToString(), IntervalHours, 1, IocAutoApprove, DateTimeOffset.UtcNow.ToString("O"));
             Notice = "Feed added. Its first poll starts shortly.";
             return RedirectToCurrentView();
         }
@@ -69,7 +72,7 @@ public class FeedsModel(AppDatabase database, FeedReader reader, ManualJobs? job
         var title = $"GitHub · {repository}";
         try
         {
-            database.Execute("INSERT INTO feeds(title,url,interval_hours,enabled,ioc_auto_approve,source_type,created_utc) VALUES(?,?,?,?,0,'github',?)",
+            database.Execute("INSERT INTO feeds(title,url,interval_hours,enabled,ioc_auto_approve,source_type,created_utc,fetch_route) VALUES(?,?,?,?,0,'github',?,'default')",
                 title, repositoryUrl, IntervalHours, 1, DateTimeOffset.UtcNow.ToString("O"));
             Notice = "GitHub repository added. Its first advisory poll starts shortly.";
             return RedirectToCurrentView();
@@ -100,10 +103,10 @@ public class FeedsModel(AppDatabase database, FeedReader reader, ManualJobs? job
         Notice = "Feed status updated."; return RedirectToCurrentView();
     }
 
-    public IActionResult OnPostEdit(long id, string title, int intervalHours, string? feedUrl, bool iocAutoApprove)
+    public async Task<IActionResult> OnPostEditAsync(long id, string title, int intervalHours, string? feedUrl, bool iocAutoApprove, CancellationToken cancellationToken, string? fetchRoute = null)
     {
         title = title.Trim();
-        var current = database.Query("SELECT url,source_type FROM feeds WHERE id=?", id).FirstOrDefault();
+        var current = database.Query("SELECT url,source_type,fetch_route FROM feeds WHERE id=?", id).FirstOrDefault();
         var url = string.IsNullOrWhiteSpace(feedUrl) ? current?["url"] : feedUrl.Trim();
         var isGitHub = current?.GetValueOrDefault("source_type") == "github";
         if (isGitHub && TryNormalizeGitHubRepository(url ?? "", out var normalizedRepository)) url = normalizedRepository;
@@ -113,7 +116,20 @@ public class FeedsModel(AppDatabase database, FeedReader reader, ManualJobs? job
         {
             Notice = "Feed name, URL, or interval is invalid."; return RedirectToCurrentView();
         }
-        try { database.Execute("UPDATE feeds SET title=?,url=?,interval_hours=?,ioc_auto_approve=?,last_checked_utc=NULL WHERE id=?", title, isGitHub ? url : uri!.ToString(), intervalHours, iocAutoApprove, id); }
+        var previousRoute = current?.GetValueOrDefault("fetch_route") ?? "default";
+        var route = fetchRoute ?? previousRoute;
+        if (route is not ("default" or "direct" or "home"))
+        {
+            Notice = "Select a valid feed route.";
+            return RedirectToCurrentView();
+        }
+        if (route != previousRoute && (route == "home" || route == "default" && DefaultFetchRoute == "home") &&
+            !await CheckHomeRouteAsync(cancellationToken))
+        {
+            Notice = "The home exit node is unavailable. Check the Tailscale sidecar and proxy.";
+            return RedirectToCurrentView();
+        }
+        try { database.Execute("UPDATE feeds SET title=?,url=?,interval_hours=?,ioc_auto_approve=?,fetch_route=?,last_checked_utc=NULL WHERE id=?", title, isGitHub ? url : uri!.ToString(), intervalHours, iocAutoApprove, route, id); }
         catch (Exception e) when (e.Message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase)) { Notice = "Another source already uses that feed URL."; return RedirectToCurrentView(); }
         database.Execute("UPDATE articles SET feed_title=? WHERE feed_id=?", title, id);
         if (iocAutoApprove)
@@ -155,7 +171,7 @@ public class FeedsModel(AppDatabase database, FeedReader reader, ManualJobs? job
                 var title = ((string?)outline.Attribute("title") ?? (string?)outline.Attribute("text") ?? uri.Host).Trim();
                 if (title.Length < 2) title = uri.Host;
                 if (title.Length > 100) title = title[..100];
-                try { added += database.Execute("INSERT OR IGNORE INTO feeds(title,url,interval_hours,enabled,created_utc) VALUES(?,?,?,?,?)", title, uri.ToString(), 6, 1, DateTimeOffset.UtcNow.ToString("O")); }
+                try { added += database.Execute("INSERT OR IGNORE INTO feeds(title,url,interval_hours,enabled,created_utc,fetch_route) VALUES(?,?,?,?,?,'default')", title, uri.ToString(), 6, 1, DateTimeOffset.UtcNow.ToString("O")); }
                 catch { skipped++; }
             }
             Notice = $"OPML import complete: {added} feed{(added == 1 ? "" : "s")} added; {skipped} invalid entries skipped; duplicates were ignored.";
@@ -191,7 +207,7 @@ public class FeedsModel(AppDatabase database, FeedReader reader, ManualJobs? job
             "status" => $"CASE WHEN f.last_error IS NOT NULL AND length(trim(f.last_error))>0 THEN 0 WHEN f.enabled=1 THEN 1 ELSE 2 END {direction},f.title COLLATE NOCASE ASC,f.id ASC",
             _ => $"f.title COLLATE NOCASE {direction},f.id ASC"
         };
-        Feeds = database.Query($"SELECT f.id,f.title,f.url,f.source_type,f.interval_hours,f.enabled,f.ioc_auto_approve,f.last_checked_utc,f.last_error,(SELECT COUNT(*) FROM articles a WHERE a.feed_id=f.id) AS article_count FROM feeds f {where} ORDER BY {ordering}", args.ToArray());
+        Feeds = database.Query($"SELECT f.id,f.title,f.url,f.source_type,f.fetch_route,f.interval_hours,f.enabled,f.ioc_auto_approve,f.last_checked_utc,f.last_error,(SELECT COUNT(*) FROM articles a WHERE a.feed_id=f.id) AS article_count FROM feeds f {where} ORDER BY {ordering}", args.ToArray());
     }
 
     private void NormalizeFilters()

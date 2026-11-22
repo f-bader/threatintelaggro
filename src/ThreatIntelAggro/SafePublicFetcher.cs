@@ -20,14 +20,7 @@ public sealed class SafePublicFetcher : IDisposable
         PooledConnectionLifetime = TimeSpan.FromMinutes(5),
         ConnectCallback = async (context, token) =>
         {
-            var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, token);
-            var rejectedAddresses = addresses.Where(ip => !IsPublic(ip)).ToArray();
-            if (addresses.Length == 0 || rejectedAddresses.Length > 0)
-            {
-                var resolved = addresses.Length == 0 ? "<none>" : string.Join(", ", addresses.Select(DescribeAddress));
-                var rejected = rejectedAddresses.Length == 0 ? "<none>" : string.Join(", ", rejectedAddresses.Select(ip => ip.ToString()));
-                throw new InvalidOperationException($"DNS safety check blocked '{FormatHost(context.DnsEndPoint.Host, context.DnsEndPoint.Port)}'. Resolved addresses: [{resolved}]. Rejected addresses: [{rejected}].");
-            }
+            var addresses = await ResolvePublicAddressesAsync(context.DnsEndPoint, token);
             Exception? lastError = null;
             foreach (var address in addresses)
             {
@@ -46,6 +39,19 @@ public sealed class SafePublicFetcher : IDisposable
             throw new HttpRequestException($"Unable to connect to '{FormatHost(context.DnsEndPoint.Host, context.DnsEndPoint.Port)}'. Tried public addresses: [{string.Join(", ", addresses.Select(ip => ip.ToString()))}]. Last socket error: {lastError?.Message ?? "none"}.", lastError);
         }
     };
+
+    internal static async Task<IPAddress[]> ResolvePublicAddressesAsync(DnsEndPoint endpoint, CancellationToken token)
+    {
+        var addresses = await Dns.GetHostAddressesAsync(endpoint.Host, token);
+        var rejectedAddresses = addresses.Where(ip => !IsPublic(ip)).ToArray();
+        if (addresses.Length == 0 || rejectedAddresses.Length > 0)
+        {
+            var resolved = addresses.Length == 0 ? "<none>" : string.Join(", ", addresses.Select(DescribeAddress));
+            var rejected = rejectedAddresses.Length == 0 ? "<none>" : string.Join(", ", rejectedAddresses.Select(ip => ip.ToString()));
+            throw new InvalidOperationException($"DNS safety check blocked '{FormatHost(endpoint.Host, endpoint.Port)}'. Resolved addresses: [{resolved}]. Rejected addresses: [{rejected}].");
+        }
+        return addresses;
+    }
 
     private static string DescribeAddress(IPAddress address) => $"{address} ({(IsPublic(address) ? "public" : "blocked")})";
 
