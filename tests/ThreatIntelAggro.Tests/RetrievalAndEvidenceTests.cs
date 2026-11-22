@@ -47,6 +47,23 @@ public sealed class RetrievalAndEvidenceTests
     }
 
     [Fact]
+    public async Task PublicFetchIdentifiesTheProjectOnRedirects()
+    {
+        var requests = 0;
+        using var fetcher = new SafePublicFetcher(new Handler(request =>
+        {
+            Assert.Equal("ThreatIntelAggro/0.1 (+https://github.com/f-bader/threatintelaggro)", request.Headers.UserAgent.ToString());
+            return ++requests == 1
+                ? new HttpResponseMessage(HttpStatusCode.Redirect) { Headers = { Location = new Uri("/rss", UriKind.Relative) } }
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<rss/>") };
+        }));
+
+        await fetcher.GetAsync("https://example.com/feed", 100, TimeSpan.FromSeconds(1), CancellationToken.None);
+
+        Assert.Equal(2, requests);
+    }
+
+    [Fact]
     public async Task HttpFailuresIncludeResponseDiagnosticsWithoutQuerySecrets()
     {
         using var fetcher = new SafePublicFetcher(new Handler(_ =>

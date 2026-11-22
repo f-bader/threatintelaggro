@@ -90,7 +90,7 @@ public sealed class SafePublicFetcher : IDisposable
             {
                 ValidateUri(current);
                 using var request = new HttpRequestMessage(HttpMethod.Get, current);
-                request.Headers.UserAgent.ParseAdd("ThreatIntelAggro/0.1");
+                request.Headers.UserAgent.ParseAdd("ThreatIntelAggro/0.1 (+https://github.com/f-bader/threatintelaggro)");
                 using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
                 if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is not null)
                 {
