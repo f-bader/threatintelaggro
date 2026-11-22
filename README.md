@@ -29,6 +29,8 @@ This keeps the existing database and other volume contents. For a bind mount ins
 
 OpenAI is the primary AI provider. Azure OpenAI is an optional provider with explicit capability checks. Public source research and KQL assistance/validation use bounded tools; the MCP endpoint is `https://mcp.xdrinternals.com`.
 
+All data submitted for AI processing is sent to the configured OpenAI provider. This can include feed and article content, URLs, uploaded screenshots, extracted text, and briefing inputs. Before submitting data, confirm that you are permitted to share it with the provider under its Traffic Light Protocol (TLP) designation, applicable privacy law, and your organization's rules.
+
 ### Optional Tailscale route for feeds
 
 Set up and approve a home Tailscale exit node. On the Docker host, make
@@ -72,7 +74,7 @@ Inbox is the default start page and first workspace tab; Briefings is the second
 
 The background scheduler defaults to 06:00 UTC, backfills missed daily windows, and waits for in-progress article analyses before closing a window. It does not create a briefing when no followed vendor, industry, or product matches an analyzed article. A briefing includes an AI-written executive summary, clean links to applicable articles with matched vendor/industry/product names, relevant unarchived detections with descriptions, and a deduplicated IOC overview with defanged values, types, and classifications. The system prompt is editable in Settings; clearing it and saving restores the displayed default. Generation uses the configured AI model. Settings also provide manual generation and a schedule enable/disable control.
 
-Each briefing is archived. Markdown and light-design PDF downloads are available. Settings can generate or rotate a full-archive RSS URL at `/briefings/rss/<random-id>`. The random ID is stored as a hash and shown only once; treat the URL as a secret. The RSS endpoint is unauthenticated at the app layer for feed readers, but its random ID is required. It sends `Cache-Control: no-store` to prevent compliant HTTP caches from storing the feed. When the deployment proxy normally requires sign-in, exempt only `/briefings/rss/*` from that sign-in rule; keep `/`, `/Settings`, `/Inbox`, `/briefings/<id>`, and the other UI routes protected. Verify that missing or invalid RSS IDs return 404.
+Each briefing is archived. Markdown and light-design PDF downloads are available. Settings can generate, rotate, or revoke the secret RSS URL at `/briefings/rss/<random-id>`. The feed covers up to 30 recent briefings and includes article titles and links plus currently approved, actionable IOCs. The full briefing remains in the dashboard. The URL is shown once, is stored as a hash, and grants access to anyone who has it. Keep it out of logs and traces. Revoked or invalid IDs return 404. The endpoint sends `Cache-Control: no-store`.
 
 Detections have JSON and KQL downloads. XDRConverter YAML is generated with a YAML serializer and checked against the [XDRConverter schema](https://github.com/f-bader/XDRConverter) pinned at commit `9c60aa8b653e89bf68ef4c318a92c1b62efe958b`. A supported ATT&CK tactic is required for YAML export; older drafts without one can still be downloaded as KQL or JSON. KQL validation uses the XDR Internals MCP service when available. Review the validation status and source evidence before using a draft; evidence matching does not establish that the detection is correct. Exported rules default to disabled.
 

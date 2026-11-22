@@ -8,20 +8,38 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  zizmor:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Audit GitHub Actions
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false
+
   test:
     name: test
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
@@ -33,12 +51,16 @@ jobs:
 
   container-build:
     name: container-build
+    permissions:
+      contents: read
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    needs: test
+    needs: [test, zizmor]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -54,7 +76,7 @@ jobs:
   publish-image:
     name: publish-image
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [test, zizmor]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -64,6 +86,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify version tag and main ancestry
         shell: bash
@@ -72,7 +95,6 @@ jobs:
             echo "Release tags must use vMAJOR.MINOR.PATCH (received: $GITHUB_REF_NAME)" >&2
             exit 1
           fi
-          git fetch origin main --no-tags
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "Refusing to publish a tag that does not point to a commit on main." >&2
             exit 1
@@ -112,5 +134,3 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

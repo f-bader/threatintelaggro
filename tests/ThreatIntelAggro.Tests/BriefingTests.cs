@@ -48,7 +48,7 @@ public sealed class BriefingTests
             Assert.Contains("Azure SQL matched article value Azure SQL", BriefingView.MatchReasons(snapshot.RootElement[0]));
         }
         Assert.Contains("1 suspicious domain", row["ioc_summary"]);
-        Assert.Contains("bad[.]example", row["markdown"]);
+        Assert.Contains("bad&#91;.&#93;example", row["markdown"]);
         Assert.DoesNotContain("Match reasons:", row["markdown"]);
         Assert.DoesNotContain("matched article value", row["markdown"]);
         using (var iocSnapshot = System.Text.Json.JsonDocument.Parse(row["iocs_snapshot_json"]!))
@@ -61,11 +61,56 @@ public sealed class BriefingTests
         Assert.Equal("%PDF-1.4", System.Text.Encoding.ASCII.GetString(BriefingExport.Pdf(row["markdown"]!)[..8]));
         Assert.True(System.Text.RegularExpressions.Regex.Matches(System.Text.Encoding.ASCII.GetString(BriefingExport.Pdf(string.Join("\n", Enumerable.Repeat("A long archive paragraph for pagination.", 100)))), "/Type /Page\\b").Count >= 2);
         Assert.Equal(1, await service.GenerateAsync(end.AddSeconds(1)));
-        var rss = BriefingService.BuildRss("https://aggro.example", db.Query("SELECT id,title,created_utc,executive_summary,detection_summary,ioc_summary,article_snapshot_json FROM briefings"));
+        var rss = service.ReadRss("https://aggro.example");
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(rss, "<item>").Count);
-        Assert.Contains("DETECTION SUMMARY", rss);
+        Assert.DoesNotContain("Executive summary", rss);
+        Assert.DoesNotContain("bad[.]example", rss);
         Assert.Contains("https://example.test/Microsoft%20security%20advisory", rss);
         Assert.True(end.AddDays(-1) < end);
+    }
+
+    [Fact]
+    public async Task Rss_uses_current_indicator_approvals_and_limits_the_archive()
+    {
+        using var fixture = DatabaseFixture.Create();
+        var db = fixture.Database;
+        var service = new BriefingService(db, new FakeWriter());
+        var end = DateTimeOffset.UtcNow;
+        IocExclusionSettings.Set(db, "briefing_prompt", "Daily prompt");
+        db.Execute("INSERT INTO briefing_follows(kind,name) VALUES('vendor','Microsoft')");
+        InsertArticle(db, "Supported article", end.AddHours(-1), "Source overview", "Microsoft");
+        var id = db.ScalarInt("SELECT id FROM articles WHERE title='Supported article'");
+        await service.GenerateAsync(end);
+        for (var index = 1; index <= 30; index++)
+            await service.GenerateAsync(end.AddSeconds(index));
+        IocIndex.Approve(db, id, "domain", "bad.example");
+
+        var rss = System.Xml.Linq.XDocument.Parse(service.ReadRss("https://aggro.example"));
+        var items = rss.Descendants("item").ToArray();
+        Assert.Equal(30, items.Length);
+        Assert.All(items, item => Assert.Contains("bad[.]example", item.Element("description")!.Value));
+        Assert.DoesNotContain(items, item => item.Element("guid")!.Value.EndsWith("/1", StringComparison.Ordinal));
+        Assert.True(IocIndex.SetReviewedRole(db, id, "domain", "bad.example", "malicious"));
+        Assert.Contains("bad[.]example | malicious", service.ReadRss("https://aggro.example"));
+        IocIndex.ResetReviewedRole(db, id, "domain", "bad.example");
+        db.Execute("INSERT INTO ioc_dismissals(article_id,ioc_type,ioc_value,dismissed_utc) VALUES(?, 'domain', 'bad.example', ?)", id, end.ToString("O"));
+        Assert.DoesNotContain("bad[.]example", service.ReadRss("https://aggro.example"));
+    }
+
+    [Fact]
+    public void Markdown_escapes_untrusted_markup_and_preserves_safe_article_links()
+    {
+        const string untrusted = "<b>fake</b> ![remote](https://example.test/image) | [link](https://example.test/)";
+        var article = new BriefingArticle(1, untrusted, "https://example.test/a(b)?x=1&y=2", "today", "", "", "", "", "", "", [], [], []);
+        var draft = new BriefingDraft(untrusted, untrusted, "", untrusted);
+        var markdown = BriefingExport.Markdown(draft, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch,
+            [article, article with { Url = "file:///tmp/example" }], [new(untrusted, untrusted, "low", "")], [new("domain", untrusted, "unknown")]);
+
+        Assert.DoesNotContain("<b>", markdown);
+        Assert.DoesNotContain("![remote]", markdown);
+        Assert.DoesNotContain("file://", markdown);
+        Assert.Contains("](https://example.test/a%28b%29?x=1&amp;y=2)", markdown);
+        Assert.Contains("/Subtype /Link", System.Text.Encoding.ASCII.GetString(BriefingExport.Pdf(markdown)));
     }
 
     [Fact]
@@ -136,9 +181,9 @@ public sealed class BriefingTests
         var briefing = service.Latest!;
         var markdown = briefing["markdown"]!;
         Assert.Contains("### Suspicious login burst", markdown);
-        Assert.Contains("Repeated failed sign-ins followed by a successful login.", markdown);
+        Assert.Contains("Repeated failed sign-ins followed by a successful login.", System.Net.WebUtility.HtmlDecode(markdown));
         Assert.Contains("| Type | Value | Role |", markdown);
-        Assert.Contains("| domain | bad[.]example | suspicious |", markdown);
+        Assert.Contains("| domain | bad&#91;.&#93;example | suspicious |", markdown);
         Assert.DoesNotContain("Detection summary\n\nDetection summary", markdown);
         Assert.DoesNotContain("Match reasons:", markdown);
         var previousCulture = System.Globalization.CultureInfo.CurrentCulture;
@@ -173,6 +218,9 @@ public sealed class BriefingTests
 
         Assert.Equal("Legacy detection", Assert.Single(service.GetDetections(oldBriefing)).Title);
         Assert.Equal("bad[.]example", Assert.Single(service.GetIocs(oldBriefing)).Value);
+        var markdown = service.ReadMarkdown(oldBriefing);
+        Assert.Contains("### Legacy detection", markdown);
+        Assert.DoesNotContain("legacy markdown", markdown);
     }
 
     [Fact]

@@ -57,7 +57,21 @@
     </div>
   }
 </div>
-<div class="briefing-rss-settings"><div><div class="eyebrow">FULL ARCHIVE RSS</div><p class="form-footnote">Unauthenticated feed access uses a random secret ID. Rotating it invalidates the previous feed URL.</p>@if (Model.BriefingFeedActive) { <span class="api-key-status is-active">ACTIVE</span> } @if (!string.IsNullOrWhiteSpace(Model.GeneratedBriefingFeedUrl)) { <code class="briefing-feed-url">@Model.GeneratedBriefingFeedUrl</code> }</div><form method="post" asp-page-handler="RotateBriefingFeed"><button class="button button-secondary" type="submit">@(Model.BriefingFeedActive ? "ROTATE FEED ID" : "GENERATE FEED URL")</button></form></div>
+<div class="briefing-rss-settings">
+  <div>
+    <div class="eyebrow">RECENT BRIEFINGS RSS</div>
+    <p class="form-footnote">The secret URL shares up to 30 recent briefings with article links and currently approved IOCs.</p>
+    @if (Model.BriefingFeedActive) { <span class="api-key-status is-active">ACTIVE</span> }
+    @if (!string.IsNullOrWhiteSpace(Model.GeneratedBriefingFeedUrl)) { <code class="briefing-feed-url">@Model.GeneratedBriefingFeedUrl</code> }
+  </div>
+  <div class="briefing-rss-actions">
+    <form method="post" asp-page-handler="RotateBriefingFeed"><button class="button button-secondary" type="submit">@(Model.BriefingFeedActive ? "ROTATE FEED ID" : "GENERATE FEED URL")</button></form>
+    @if (Model.BriefingFeedActive)
+    {
+      <form method="post" asp-page-handler="RevokeBriefingFeed" data-confirm="Revoke the current RSS feed URL?"><button class="button button-secondary" type="submit">REVOKE FEED URL</button></form>
+    }
+  </div>
+</div>
 </section>
 <section class="panel ai-settings-panel"><div class="panel-head"><div><div class="eyebrow">ANALYSIS ENGINE</div><h2>AI model and reasoning</h2></div><span class="api-key-status @(Model.CurrentAiSettings.IsConfigured ? "is-active" : "is-missing")">@(Model.CurrentAiSettings.IsConfigured ? "CONFIGURED" : "SETUP REQUIRED")</span></div>
 <p class="form-footnote ai-settings-status">@(Model.ApiKeyConfigured ? "OpenAI credential is configured." : "OpenAI credential is missing; add it through the deployment secret or environment configuration.") Model capability is checked when a request runs. Provider errors are shown on the affected article. Effort can affect response time and token use.</p>

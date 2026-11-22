@@ -195,6 +195,14 @@ public sealed class SettingsModel(AppDatabase database, AiModelSettingsService a
         Response.Headers.CacheControl = "no-store"; Notice = "Briefing RSS access ID generated. Copy the feed URL now; it cannot be displayed again."; return RedirectToPage();
     }
 
+    public IActionResult OnPostRevokeBriefingFeed()
+    {
+        IocExclusionSettings.Set(database, "briefing_rss_hash", "");
+        GeneratedBriefingFeedUrl = null;
+        Notice = "Briefing RSS access revoked.";
+        return RedirectToPage();
+    }
+
     public IActionResult OnPostToggleM365(bool enabled)
     {
         IocExclusionSettings.Set(database, "exclude_m365_endpoints", enabled ? "true" : "false");

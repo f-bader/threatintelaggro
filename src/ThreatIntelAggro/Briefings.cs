@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -317,31 +318,55 @@ public sealed class BriefingService(AppDatabase database, IBriefingWriter writer
         }
         return results.ToArray();
     }
-    public static string BuildRss(string baseUrl, IReadOnlyList<Dictionary<string, string?>> items)
+    public string ReadRss(string baseUrl)
     {
-        var xml = new System.Xml.Linq.XElement("channel", new System.Xml.Linq.XElement("title", "Threat Intel Aggro Briefings"), new System.Xml.Linq.XElement("link", baseUrl), new System.Xml.Linq.XElement("description", "Daily threat briefings"));
-        foreach (var item in items)
+        var items = database.Query("SELECT id,title,created_utc,article_ids_json,article_snapshot_json FROM briefings ORDER BY window_end_utc DESC LIMIT 30");
+        var articleIds = items.Select(item => ReadArticleIds(item["article_ids_json"])).ToArray();
+        var approved = IocIndex.Read(database, articleIds: articleIds.SelectMany(ids => ids).Distinct().ToArray())
+            .ToLookup(ioc => long.Parse(ioc.ArticleId, CultureInfo.InvariantCulture));
+        var channel = new System.Xml.Linq.XElement("channel",
+            new System.Xml.Linq.XElement("title", "Threat Intel Aggro Briefings"),
+            new System.Xml.Linq.XElement("link", baseUrl),
+            new System.Xml.Linq.XElement("description", "Recent threat briefings"));
+        for (var index = 0; index < items.Count; index++)
         {
-            var description = new StringBuilder($"EXECUTIVE BRIEFING\n{item.GetValueOrDefault("executive_summary")}\n\nDETECTION SUMMARY");
-            var detections = BriefingView.ReadDetections(item.GetValueOrDefault("detections_snapshot_json"));
-            foreach (var detection in detections)
-                description.Append("\n\n").Append(detection.Title).Append("\n").Append(detection.Description);
-            if (detections.Length == 0) description.Append("\nNo linked detections.");
-            description.Append($"\n\nIOC SUMMARY\n{item.GetValueOrDefault("ioc_summary")}\n\nType | Value | Role");
-            foreach (var ioc in BriefingView.ReadIocs(item.GetValueOrDefault("iocs_snapshot_json")))
-                description.Append("\n").Append(ioc.Type).Append(" | ").Append(ioc.Value).Append(" | ").Append(ioc.Role);
-            description.Append("\n\nAPPLICABLE ARTICLES");
-            try
+            var item = items[index];
+            var description = new StringBuilder("APPLICABLE ARTICLES");
+            foreach (var article in ReadArticles(item))
             {
-                using var snapshot = JsonDocument.Parse(item.GetValueOrDefault("article_snapshot_json") ?? "[]");
-                foreach (var article in snapshot.RootElement.EnumerateArray())
-                    description.Append("\n- ").Append(article.GetProperty("Title").GetString()).Append(" — ").Append(article.GetProperty("Url").GetString());
+                description.Append("\n- ").Append(article.Title);
+                if (BriefingExport.PublicLink(article.Url) is { } url)
+                    description.Append(" — ").Append(new UriBuilder(url) { Query = "", Fragment = "" }.Uri.AbsoluteUri);
             }
-            catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException) { }
-            xml.Add(new System.Xml.Linq.XElement("item", new System.Xml.Linq.XElement("title", item["title"]), new System.Xml.Linq.XElement("link", $"{baseUrl}/briefings/{item["id"]}"), new System.Xml.Linq.XElement("guid", $"{baseUrl}/briefings/{item["id"]}"), new System.Xml.Linq.XElement("pubDate", DateTimeOffset.Parse(item["created_utc"]!).ToString("r")), new System.Xml.Linq.XElement("description", description.ToString())));
+            var iocs = BriefingIndicators.Distinct(articleIds[index].Distinct().SelectMany(id => approved[id])
+                .Select(ioc => new BriefingIoc(ioc.Type, BriefingIndicators.Defang(ioc.Type, ioc.Value), ioc.Role)));
+            if (iocs.Length > 0) description.Append("\n\nAPPROVED INDICATORS");
+            foreach (var ioc in iocs)
+                description.Append("\n").Append(ioc.Type).Append(" | ").Append(ioc.Value).Append(" | ").Append(ioc.Role);
+            var link = $"{baseUrl}/briefings/{item["id"]}";
+            channel.Add(new System.Xml.Linq.XElement("item",
+                new System.Xml.Linq.XElement("title", RssText(item["title"] ?? "")),
+                new System.Xml.Linq.XElement("link", link),
+                new System.Xml.Linq.XElement("guid", link),
+                new System.Xml.Linq.XElement("pubDate", DateTimeOffset.Parse(item["created_utc"]!).UtcDateTime.ToString("R", CultureInfo.InvariantCulture)),
+                new System.Xml.Linq.XElement("description", RssText(description.ToString()))));
         }
-        return new System.Xml.Linq.XDocument(new System.Xml.Linq.XDeclaration("1.0", "utf-8", null), new System.Xml.Linq.XElement("rss", new System.Xml.Linq.XAttribute("version", "2.0"), xml)).ToString();
+        return new System.Xml.Linq.XDocument(new System.Xml.Linq.XElement("rss",
+            new System.Xml.Linq.XAttribute("version", "2.0"), channel)).ToString();
     }
+
+    private static string RssText(string text) => WebUtility.HtmlEncode(FeedReader.CleanXmlCharacters(text));
+
+    private static BriefingArticle[] ReadArticles(Dictionary<string, string?> briefing)
+    {
+        try { return JsonSerializer.Deserialize<BriefingArticle[]>(briefing.GetValueOrDefault("article_snapshot_json") ?? "[]") ?? []; }
+        catch (JsonException) { return []; }
+    }
+
+    public string ReadMarkdown(Dictionary<string, string?> briefing) => BriefingExport.Markdown(
+        new BriefingDraft(briefing["title"] ?? "", briefing["executive_summary"] ?? "", briefing["detection_summary"] ?? "", briefing["ioc_summary"] ?? ""),
+        DateTimeOffset.Parse(briefing["window_start_utc"]!), DateTimeOffset.Parse(briefing["window_end_utc"]!),
+        ReadArticles(briefing), GetDetections(briefing), GetIocs(briefing));
 }
 
 public sealed class BriefingScheduler(IServiceScopeFactory scopes, AppDatabase database, ILogger<BriefingScheduler> log) : BackgroundService
@@ -391,31 +416,50 @@ public static class BriefingExport
     private static readonly int[] HelveticaLowerWidths = [556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500];
     public static string Markdown(BriefingDraft draft, DateTimeOffset start, DateTimeOffset end, IReadOnlyList<BriefingArticle> articles, IReadOnlyList<BriefingDetection> detections, IReadOnlyList<BriefingIoc> iocs)
     {
-        var text = new StringBuilder($"# {draft.Title}\n\n**Window:** {start:yyyy-MM-dd HH:mm} UTC – {end:yyyy-MM-dd HH:mm} UTC\n\n## Executive briefing\n\n{draft.ExecutiveSummary}\n\n## Applicable articles\n\n");
-        foreach (var a in articles)
+        var text = new StringBuilder($"# {MarkdownText(draft.Title)}\n\n**Window:** {start:yyyy-MM-dd HH:mm} UTC – {end:yyyy-MM-dd HH:mm} UTC\n\n## Executive briefing\n\n{MarkdownText(draft.ExecutiveSummary)}\n\n## Applicable articles\n\n");
+        foreach (var article in articles)
         {
-            text.Append($"- [{MarkdownCell(a.Title)}]({a.Url}) — {a.PublishedUtc}");
-            var categories = new List<string>();
-            if (a.VendorMatches.Length > 0) categories.Add($"Vendors: {a.VendorMatches}");
-            if (a.IndustryMatches.Length > 0) categories.Add($"Industries: {a.IndustryMatches}");
-            if (a.ProductMatches.Length > 0) categories.Add($"Products: {a.ProductMatches}");
-            if (categories.Count > 0) text.Append(" · ").Append(string.Join("; ", categories));
+            var title = MarkdownText(article.Title);
+            var url = PublicLink(article.Url)?.AbsoluteUri.Replace("&", "&amp;", StringComparison.Ordinal).Replace("(", "%28", StringComparison.Ordinal).Replace(")", "%29", StringComparison.Ordinal);
+            text.Append(url is null ? $"- {title}" : $"- [{title}]({url})");
+            text.Append(" — ").Append(MarkdownText(article.PublishedUtc));
+            if (!string.IsNullOrEmpty(article.VendorMatches)) text.Append(" · Vendors: ").Append(MarkdownText(article.VendorMatches));
+            if (!string.IsNullOrEmpty(article.IndustryMatches)) text.Append(" · Industries: ").Append(MarkdownText(article.IndustryMatches));
+            if (!string.IsNullOrEmpty(article.ProductMatches)) text.Append(" · Products: ").Append(MarkdownText(article.ProductMatches));
             text.Append('\n');
         }
         text.Append("\n## Detection summary\n\n");
         if (detections.Count == 0) text.Append("No linked detections.\n");
         foreach (var detection in detections)
-            text.Append("### ").Append(detection.Title.Replace("\r", " ").Replace("\n", " ")).Append("\n\n").Append(detection.Description).Append("\n\n");
-        text.Append($"## IOC summary\n\n{draft.IocSummary}\n\n");
+            text.Append("### ").Append(MarkdownText(detection.Title)).Append("\n\n").Append(MarkdownText(detection.Description)).Append("\n\n");
+        text.Append($"\n## IOC summary\n\n{MarkdownText(draft.IocSummary)}\n\n");
         if (iocs.Count == 0) text.Append("No IOC values were available for this briefing.\n");
         else
         {
             text.Append("| Type | Value | Role |\n| --- | --- | --- |\n");
-            foreach (var ioc in iocs) text.Append("| ").Append(MarkdownCell(ioc.Type)).Append(" | ").Append(MarkdownCell(ioc.Value)).Append(" | ").Append(MarkdownCell(ioc.Role)).Append(" |\n");
+            foreach (var ioc in iocs)
+                text.Append("| ").Append(MarkdownText(ioc.Type)).Append(" | ").Append(MarkdownText(ioc.Value)).Append(" | ").Append(MarkdownText(ioc.Role)).Append(" |\n");
         }
         return text.ToString();
     }
-    private static string MarkdownCell(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("|", "\\|", StringComparison.Ordinal).Replace("\r", " ").Replace("\n", " ");
+
+    internal static Uri? PublicLink(string? value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.UserInfo.Length == 0 ? uri : null;
+
+    private static string MarkdownText(string? value)
+    {
+        // Character references preserve visible text without introducing Markdown syntax or raw HTML.
+        var text = new StringBuilder();
+        foreach (var c in (value ?? "").Trim())
+        {
+            if (char.IsControl(c)) text.Append(' ');
+            else if ((char.IsAscii(c) && (char.IsPunctuation(c) || char.IsSymbol(c))) && c is not '.' and not ',' and not '\'')
+                text.Append("&#").Append((int)c).Append(';');
+            else text.Append(c);
+        }
+        return text.ToString().Replace("www.", "www&#46;", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static byte[] Pdf(string markdown)
     {
         var rows = new List<(string Text, int Kind, int Height, string? Uri, string[]? Cells, bool IsTableHeader)>();
@@ -441,13 +485,13 @@ public static class BriefingExport
             var article = Regex.Match(line, "^- \\[([^]]+)\\]\\(([^)]+)\\)(.*)$");
             if (article.Success)
             {
-                var title = PdfAscii(article.Groups[1].Value).Trim();
-                rows.Add((title, 4, 14, article.Groups[2].Value, null, false));
-                var details = PdfAscii(article.Groups[3].Value.Trim().TrimStart('—', '–', '-').Trim());
+                var title = PdfAscii(WebUtility.HtmlDecode(article.Groups[1].Value)).Trim();
+                rows.Add((title, 4, 14, WebUtility.HtmlDecode(article.Groups[2].Value), null, false));
+                var details = PdfAscii(WebUtility.HtmlDecode(article.Groups[3].Value).Trim().TrimStart('—', '–', '-').Trim());
                 if (details.Length > 0) foreach (var wrapped in Wrap("  " + details, 90)) rows.Add((wrapped, 0, 14, null, null, false));
                 continue;
             }
-            line = PdfAscii(Regex.Replace(line, "\\[([^]]+)\\]\\(([^)]+)\\)", "$1"));
+            line = PdfAscii(WebUtility.HtmlDecode(Regex.Replace(line, "\\[([^]]+)\\]\\(([^)]+)\\)", "$1")));
             foreach (var wrapped in Wrap(line, kind == 1 ? 68 : 90)) rows.Add((wrapped, kind, kind == 1 ? 30 : kind == 2 ? 20 : 14, null, null, false));
         }
         var pages = new List<List<(string Text, int Kind, int Height, string? Uri, string[]? Cells, bool IsTableHeader)>>(); var current = new List<(string Text, int Kind, int Height, string? Uri, string[]? Cells, bool IsTableHeader)>(); var used = 0;
@@ -576,10 +620,10 @@ public static class BriefingExport
         for (var index = 0; index < value.Length; index++)
         {
             if (value[index] == '\\' && index + 1 < value.Length && value[index + 1] == '|') { cell.Append('|'); index++; }
-            else if (value[index] == '|') { cells.Add(cell.ToString().Trim()); cell.Clear(); }
+            else if (value[index] == '|') { cells.Add(WebUtility.HtmlDecode(cell.ToString().Trim())); cell.Clear(); }
             else cell.Append(value[index]);
         }
-        cells.Add(cell.ToString().Trim());
+        cells.Add(WebUtility.HtmlDecode(cell.ToString().Trim()));
         return cells.ToArray();
     }
     private static string PdfAscii(string value) => value

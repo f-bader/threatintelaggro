@@ -115,7 +115,7 @@ public sealed class FeedReader(SafePublicFetcher fetcher, AppDatabase database, 
 
     private static string? Text(XElement? element) => element is null ? null : CleanXmlCharacters(element.HasElements ? string.Concat(element.DescendantNodes().OfType<XText>().Select(x => x.Value)) : element.Value).Trim();
 
-    private static string CleanXmlCharacters(string value)
+    internal static string CleanXmlCharacters(string value)
     {
         StringBuilder? cleaned = null;
         for (var index = 0; index < value.Length; index++)

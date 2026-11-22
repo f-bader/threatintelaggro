@@ -136,6 +136,7 @@ a { color: inherit; }
 .follow-kind { color: var(--accent); font: 10px var(--mono); }
 .briefing-rss-settings { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
 .briefing-rss-settings > div { min-width: 0; }
+.briefing-rss-actions { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 8px; }
 .briefing-feed-url { display: block; margin-top: 9px; overflow-wrap: anywhere; color: #bfe8ed; }
 @media (max-width: 650px) {
   .briefing-empty,.briefing-panel { padding: 13px; }

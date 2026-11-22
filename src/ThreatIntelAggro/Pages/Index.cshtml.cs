@@ -36,7 +36,7 @@ public sealed class IndexModel(BriefingService briefings, ManualJobs jobs) : Pag
         var row = briefings.Get(id);
         if (row is null) return NotFound();
         var title = RegexSafe(row["title"] ?? "briefing");
-        return pdf ? File(BriefingExport.Pdf(row["markdown"] ?? ""), "application/pdf", $"{title}.pdf") : File(System.Text.Encoding.UTF8.GetBytes(row["markdown"] ?? ""), "text/markdown; charset=utf-8", $"{title}.md");
+        return pdf ? File(BriefingExport.Pdf(row["markdown"] ?? ""), "application/pdf", $"{title}.pdf") : File(System.Text.Encoding.UTF8.GetBytes(briefings.ReadMarkdown(row)), "text/markdown; charset=utf-8", $"{title}.md");
     }
     private static string RegexSafe(string value) => System.Text.RegularExpressions.Regex.Replace(value.ToLowerInvariant(), "[^a-z0-9-]+", "-").Trim('-');
 }

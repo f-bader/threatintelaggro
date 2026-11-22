@@ -13,7 +13,7 @@ public sealed record IocRecord(
 public static class IocIndex
 {
     public static IReadOnlyList<IocRecord> Read(AppDatabase database, int? days = null,
-        string? vendor = null, string? industry = null, string? type = null, string? search = null, bool archived = false, bool includeUnapproved = false, bool includeNonActionable = false, string? classification = null, bool includeFiltered = false)
+        string? vendor = null, string? industry = null, string? type = null, string? search = null, bool archived = false, bool includeUnapproved = false, bool includeNonActionable = false, string? classification = null, bool includeFiltered = false, IReadOnlyCollection<long>? articleIds = null)
     {
         var args = new List<object?>();
         var dateFilter = "";
@@ -21,6 +21,13 @@ public static class IocIndex
         {
             dateFilter = "AND COALESCE(a.published_utc,a.first_seen_utc) >= ?";
             args.Add(DateTimeOffset.UtcNow.AddDays(-days.Value).ToString("O"));
+        }
+        if (articleIds is not null)
+        {
+            if (articleIds.Count == 0) return [];
+            var ids = JsonSerializer.Serialize(articleIds);
+            dateFilter += " AND a.id IN (SELECT value FROM json_each(?))";
+            args.Add(ids);
         }
         var articles = database.Query($"SELECT a.id,a.title,a.url,a.published_utc,a.first_seen_utc,a.analysis_json FROM articles a WHERE a.analysis_json IS NOT NULL {dateFilter} ORDER BY COALESCE(a.published_utc,a.first_seen_utc) DESC", args.ToArray());
         var records = new List<IocRecord>();
