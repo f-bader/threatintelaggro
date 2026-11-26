@@ -1,0 +1,30 @@
+@page "/Diagnostics"
+@model DiagnosticsModel
+@{
+    ViewData["Title"] = "Diagnostics";
+}
+<div class="page-heading">
+  <div><div class="eyebrow"><span class="live-dot"></span> PIPELINE / FAILURE RECORDS</div><h1>Analysis diagnostics</h1><p class="subhead">Recent failed AI stages and retained model output.</p></div>
+</div>
+<section class="panel diagnostics-panel">
+  <div class="panel-head"><div><div class="eyebrow">RETAINED FAILURES</div><h2>@Model.Failures.Count recent record@(Model.Failures.Count == 1 ? "" : "s")</h2></div><span class="quiet-label">LAST 100 · RAW OUTPUT TRUNCATED AT 100 KB</span></div>
+  @if (Model.Failures.Count == 0)
+  {
+    <div class="empty-state"><div class="empty-icon">⌁</div><h3>No failed stages recorded</h3><p>When an AI stage fails, its diagnostic and available raw output will appear here.</p></div>
+  }
+  <div class="diagnostic-list">
+  @foreach (var item in Model.Failures)
+  {
+    var context = item["article_id"] is not null
+      ? $"Article {item["article_id"]} · {item["article_title"]}"
+      : $"Briefing window · {item["briefing_window_start_utc"]} to {item["briefing_window_end_utc"]}";
+    <details class="diagnostic-entry">
+      <summary><span class="pipeline-tag ai-failed"><i></i> FAILED</span><span class="diagnostic-stage">@item["stage_key"]</span><span class="diagnostic-context">@context</span><time>@(DateTimeOffset.TryParse(item["created_utc"], out var timestamp) ? timestamp.ToLocalTime().ToString("dd MMM yyyy · HH:mm:ss") : item["created_utc"])</time></summary>
+      <div class="diagnostic-content"><h3>Failure</h3><p>@item["error"]</p>
+        @if (!string.IsNullOrWhiteSpace(item["raw_output"])) { <h3>Raw output</h3><pre>@item["raw_output"]</pre> }
+        else { <p class="quiet-label">No model output was available for this failure.</p> }
+      </div>
+    </details>
+  }
+  </div>
+</section>

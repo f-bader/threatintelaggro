@@ -1,0 +1,236 @@
+@page
+@model SettingsModel
+@{
+    ViewData["Title"] = "Settings";
+}
+<div class="page-heading"><div><div class="eyebrow">LOCAL CONTROLS / ANALYSIS / IOC HYGIENE</div><h1>Settings</h1><p class="subhead">Configure analysis and indicator handling.</p></div><a class="button button-secondary" asp-page="/Inbox">← &nbsp;Back to inbox</a></div>
+@if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
+<section class="panel diagnostics-settings-panel"><div class="panel-head"><div><div class="eyebrow">LOCAL INTERFACE</div><h2>Diagnostics</h2></div><span class="api-key-status @(Model.DiagnosticsVisible ? "is-active" : "is-missing")">@(Model.DiagnosticsVisible ? "VISIBLE" : "HIDDEN")</span></div><form method="post" asp-page-handler="SaveDiagnosticsVisibility" class="diagnostics-settings-form"><label><input asp-for="DiagnosticsVisibleInput" type="checkbox"/><span><strong>Show the Diagnostics tab</strong><small>When enabled, the tab displays recent failed analysis and briefing stages with their captured output.</small></span></label><button class="button button-secondary" type="submit">SAVE DISPLAY SETTING</button></form></section>
+<section class="panel inbox-defaults-panel"><div class="panel-head"><div><div class="eyebrow">LOCAL INTERFACE</div><h2>Inbox defaults</h2></div></div><form method="post" asp-page-handler="SaveInboxDefaults" class="inbox-defaults-form"><label>Default coverage view<select asp-for="DefaultCoverageViewInput"><option value="articles">All articles</option><option value="duplicates">Duplicate groups</option><option value="topics">Topic groups</option></select><small>Used when opening the inbox without an explicit coverage view in the URL.</small></label><button class="button button-secondary" type="submit">SAVE INBOX DEFAULT</button></form></section>
+@{
+    var defaultFeedRoute = Model.DefaultFetchRoute;
+    var homeRouteAvailable = await Model.CheckHomeRouteAsync(ViewContext.HttpContext.RequestAborted);
+}
+<section class="panel">
+    <div class="panel-head">
+        <h2>Feed routing</h2>
+        <span class="api-key-status @(homeRouteAvailable ? "is-active" : "is-missing")">@(homeRouteAvailable ? "HOME EXIT NODE AVAILABLE" : "HOME EXIT NODE UNAVAILABLE")</span>
+    </div>
+    <form method="post" asp-page-handler="SaveFeedRoute" class="inbox-defaults-form feed-default-form">
+        <label>Default feed route
+            <select name="route">
+                <option value="direct" selected="@(defaultFeedRoute == "direct")">Direct (VPS)</option>
+                <option value="home" selected="@(defaultFeedRoute == "home")" disabled="@(!homeRouteAvailable)">Home exit node</option>
+            </select>
+        </label>
+        <button class="button button-secondary" type="submit">Save feed default</button>
+        <p class="form-footnote">Applies to feeds using the default route. Individual feeds can override it.</p>
+    </form>
+</section>
+<section class="panel briefing-settings-panel"><div class="panel-head"><div><div class="eyebrow">DAILY INTELLIGENCE</div><h2>Threat briefing</h2></div><span class="api-key-status @(Model.BriefingEnabled ? "is-active" : "is-missing")">@(Model.BriefingEnabled ? "SCHEDULED" : "PAUSED")</span></div>
+<form method="post" asp-page-handler="SaveBriefing" class="briefing-settings-form"><label class="briefing-enable"><input asp-for="BriefingEnabledInput" type="checkbox"/><span>Enable daily briefing generation</span></label><label>Generation time · UTC<input asp-for="BriefingTimeInput" type="time" required/></label><label class="briefing-prompt-label">Generation system prompt<textarea asp-for="BriefingPromptInput" rows="7" maxlength="10000"></textarea><small>Used for future generations. Leave blank and save to restore the default. Article content is treated as untrusted evidence.</small></label><button class="button button-primary" type="submit">SAVE BRIEFING SETTINGS</button></form>
+<div class="briefing-follow-controls" id="briefing-follows">
+  <div class="briefing-follow-heading"><div class="eyebrow">FOLLOWED VENDORS, INDUSTRIES & PRODUCTS</div><p class="form-footnote">Type to find names from analyzed articles or add a custom name. Matching is fuzzy and reports why an article matched.</p></div>
+  <datalist id="briefing-vendors">@foreach (var name in Model.AvailableBriefingVendors) { <option value="@name"></option> }</datalist>
+  <datalist id="briefing-industries">@foreach (var name in Model.AvailableBriefingIndustries) { <option value="@name"></option> }</datalist>
+  <datalist id="briefing-products">@foreach (var name in Model.AvailableBriefingProducts) { <option value="@name"></option> }</datalist>
+  <form method="post" asp-page-handler="AddBriefingFollow" class="briefing-follow-add" autocomplete="off">
+    <select asp-for="FollowKind" aria-label="Name type"><option value="vendor">Affected vendor</option><option value="industry">Targeted industry</option><option value="product">Affected product</option></select>
+    <div class="briefing-follow-input-wrap">
+      <input asp-for="FollowName" placeholder="Type a vendor, industry, or product name" maxlength="200" required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="briefing-follow-suggestions" aria-label="Search or add a followed name"/>
+      <div class="briefing-follow-suggestions" id="briefing-follow-suggestions" role="listbox" aria-label="Name suggestions" hidden></div>
+    </div>
+    <button class="button button-secondary briefing-follow-custom-submit" type="submit">+ ADD CUSTOM</button>
+  </form>
+  @if (Model.BriefingFollows.Count == 0) { <p class="form-footnote briefing-follow-empty">No vendors, industries, or products followed yet.</p> } else {
+    <div class="briefing-follow-list" aria-label="Followed vendors, industries, and products">
+      @foreach (var follow in Model.BriefingFollows) {
+        var isEnabled = follow["is_enabled"] == "1";
+        <div class="briefing-follow-chip @(isEnabled ? "is-enabled" : "is-disabled")" data-kind="@follow["kind"]" data-name="@follow["name"]">
+          <span class="follow-kind">@follow["kind"]?.ToUpperInvariant()</span>
+          <strong>@follow["name"]</strong>
+          <span class="quiet-label">@(follow["is_custom"] == "1" ? "CUSTOM" : "CATALOG")</span>
+          <form method="post" asp-page-handler="ToggleBriefingFollow"><input type="hidden" name="id" value="@follow["id"]"/><button class="follow-chip-toggle" type="submit" aria-label="@(isEnabled ? "Disable" : "Enable") @follow["name"]">@(isEnabled ? "ON" : "OFF")</button></form>
+          <form method="post" asp-page-handler="RemoveBriefingFollow"><input type="hidden" name="id" value="@follow["id"]"/><button class="follow-chip-remove" type="submit" aria-label="Remove @follow["name"]" title="Remove @follow["name"]">×</button></form>
+        </div>
+      }
+    </div>
+  }
+</div>
+<div class="briefing-rss-settings">
+  <div>
+    <div class="eyebrow">RECENT BRIEFINGS RSS</div>
+    <p class="form-footnote">The secret URL shares up to 30 recent briefings with article links and currently approved IOCs.</p>
+    @if (Model.BriefingFeedActive) { <span class="api-key-status is-active">ACTIVE</span> }
+    @if (!string.IsNullOrWhiteSpace(Model.GeneratedBriefingFeedUrl)) { <code class="briefing-feed-url">@Model.GeneratedBriefingFeedUrl</code> }
+  </div>
+  <div class="briefing-rss-actions">
+    <form method="post" asp-page-handler="RotateBriefingFeed"><button class="button button-secondary" type="submit">@(Model.BriefingFeedActive ? "ROTATE FEED ID" : "GENERATE FEED URL")</button></form>
+    @if (Model.BriefingFeedActive)
+    {
+      <form method="post" asp-page-handler="RevokeBriefingFeed" data-confirm="Revoke the current RSS feed URL?"><button class="button button-secondary" type="submit">REVOKE FEED URL</button></form>
+    }
+  </div>
+</div>
+</section>
+<section class="panel ai-settings-panel"><div class="panel-head"><div><div class="eyebrow">ANALYSIS ENGINE</div><h2>AI model and reasoning</h2></div><span class="api-key-status @(Model.CurrentAiSettings.IsConfigured ? "is-active" : "is-missing")">@(Model.CurrentAiSettings.IsConfigured ? "CONFIGURED" : "SETUP REQUIRED")</span></div>
+<p class="form-footnote ai-settings-status">@(Model.ApiKeyConfigured ? "OpenAI credential is configured." : "OpenAI credential is missing; add it through the deployment secret or environment configuration.") Model capability is checked when a request runs. Provider errors are shown on the affected article. Effort can affect response time and token use.</p>
+@if (Model.AvailableModels.Count > 0) { <datalist id="ai-model-options">@foreach (var modelId in Model.AvailableModels) { <option value="@modelId"></option> }</datalist> }
+<form method="post" asp-page-handler="SaveAiSettings" class="ai-settings-form">
+<div asp-validation-summary="ModelOnly" class="validation"></div>
+<label>Default model or deployment ID<input asp-for="AiModel" list="ai-model-options" required maxlength="200" placeholder="provider model or Azure deployment"/><small>Refresh the OpenAI list or enter a deployment ID.</small></label>
+<label>Default reasoning effort<select asp-for="AiEffort"><option value="">Provider default</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+<details class="ai-stage-overrides"><summary>ADVANCED · PER-STAGE OVERRIDES</summary><div class="ai-stage-grid">
+<label>Research model<input asp-for="ResearchModel" list="ai-model-options" maxlength="200" placeholder="Inherit default model"/></label><label>Research effort<select asp-for="ResearchEffort"><option value="">Inherit default effort</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+<label>Article analysis model<input asp-for="ArticleModel" list="ai-model-options" maxlength="200" placeholder="Inherit default model"/></label><label>Article analysis effort<select asp-for="ArticleEffort"><option value="">Inherit default effort</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+<label>Detection model<input asp-for="DetectionModel" list="ai-model-options" maxlength="200" placeholder="Inherit default model"/></label><label>Detection effort<select asp-for="DetectionEffort"><option value="">Inherit default effort</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+<label>KQL repair model<input asp-for="RepairModel" list="ai-model-options" maxlength="200" placeholder="Inherit default model"/></label><label>KQL repair effort<select asp-for="RepairEffort"><option value="">Inherit default effort</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+</div></details><button class="button button-primary" type="submit">SAVE AI SETTINGS</button></form>
+<form method="post" asp-page-handler="RefreshModels" class="ai-model-refresh"><button class="small-action" type="submit">LOAD OPENAI MODEL IDS</button><span>Uses the configured credential to list available IDs; it does not generate a response.</span></form>
+<p class="form-footnote">Settings are saved in the local database. Blank stage overrides inherit the defaults. An analysis keeps the model and effort it started with across retries.</p></section>
+<section class="panel api-access-panel">
+  <div class="panel-head">
+    <div><div class="eyebrow">MACHINE ACCESS</div><h2>IOC API key</h2></div>
+    <span class="api-key-status @(Model.ApiKeyActive ? "is-active" : "is-missing")">@(Model.ApiKeyActive ? "ACTIVE" : "NOT CREATED")</span>
+  </div>
+  <div class="api-access-content">
+    <div class="api-access-copy">
+      <p class="api-access-description">Call the fixed endpoint with this key in the request’s Authorization header.</p>
+      <div class="api-key-usage"><span>ENDPOINT</span><code>GET /api/iocs</code><span>HEADER</span><code>Authorization: Bearer &lt;key&gt;</code></div>
+      @if (!string.IsNullOrWhiteSpace(Model.ApiKeyLastRotatedUtc) && DateTimeOffset.TryParse(Model.ApiKeyLastRotatedUtc, out var rotated)) {
+        <div class="api-key-meta"><span class="api-key-meta-label">LAST ROTATED</span><time>@rotated.ToLocalTime().ToString("dd MMM yyyy · HH:mm")</time><span class="api-key-grace">Previous key remains valid for 24 hours after rotation.</span></div>
+      }
+      @if (!string.IsNullOrWhiteSpace(Model.GeneratedApiKey)) {
+        <label class="api-key-generated-label" for="generated-api-key">NEW KEY · COPY IT NOW</label>
+        <div class="api-key-generated"><code id="generated-api-key">@Model.GeneratedApiKey</code><button class="small-action" type="button" data-copy-target="generated-api-key">COPY</button></div>
+      }
+    </div>
+    <form method="post" asp-page-handler="RotateApiKey"><button class="button button-primary" type="submit">@(Model.ApiKeyActive ? "ROTATE API KEY" : "GENERATE API KEY")</button></form>
+  </div>
+  <p class="api-access-footer">Only a one-way hash is stored. The key is shown once after generation. <code>/health</code> does not require a key.</p>
+</section>
+<section class="panel add-feed-panel ioc-exclusion-panel"><div class="panel-head"><div><div class="eyebrow">IOC QUALITY CONTROLS</div><h2>IOC exclusions <span class="count-chip">@Model.IocExclusions.Count</span></h2></div><span class="quiet-label">FILTERED FROM RESULTS, CSV, AND API</span></div>
+<form method="post" asp-page-handler="ToggleM365" class="m365-exclusion-form"><label><input type="checkbox" name="enabled" value="true" checked="@(Model.ExcludeM365)"/><span><strong>Exclude Microsoft 365 URLs and IP address ranges</strong><small>Official Microsoft endpoint data refreshes daily. @(DateTimeOffset.TryParse(Model.M365RefreshedUtc, out var m365Updated) ? $"Last refreshed {m365Updated.ToLocalTime():dd MMM yyyy · HH:mm}." : "Endpoint list is waiting for its first refresh.")</small></span></label><button class="small-action" type="submit">SAVE</button></form>
+@if (!string.IsNullOrWhiteSpace(Model.M365RefreshError)) { <p class="m365-error" title="@Model.M365RefreshError">Microsoft 365 endpoint refresh issue: @Model.M365RefreshError</p> }
+<form method="post" asp-page-handler="AddIocExclusion" class="ioc-exclusion-add"><label for="IocExclusion">Domain, IP address, or IP range<input asp-for="IocExclusion" id="IocExclusion" placeholder="example.com or 203.0.113.0/24" required maxlength="253"/></label><button class="button button-primary" type="submit">ADD EXCLUSION <span>＋</span></button></form>
+@if (Model.IocExclusions.Count > 0) { <div class="ioc-exclusion-list">@foreach (var exclusion in Model.IocExclusions) { <div><code>@exclusion["value"]</code><form method="post" asp-page-handler="RemoveIocExclusion"><input type="hidden" name="id" value="@exclusion["id"]"/><button class="small-action danger-action" type="submit" aria-label="Remove IOC exclusion @exclusion["value"]">REMOVE</button></form></div> }</div> }
+<p class="form-footnote">Domain entries also exclude subdomains. Use CIDR notation for ranges, such as 192.0.2.0/24. Existing article analyses are filtered when viewed; their saved raw analysis is retained.</p></section>
+<section class="panel ioc-expiry-panel"><div class="panel-head"><div><div class="eyebrow">IOC LIFETIME</div><h2>Automatic expiry</h2></div><span class="quiet-label">EXPIRED INDICATORS ARE HIDDEN FROM RESULTS AND API</span></div>
+<form method="post" asp-page-handler="SaveIocExpiry" class="ioc-expiry-form">
+<label>IP addresses / ranges<input asp-for="IpExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Domains<input asp-for="DomainExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>URLs<input asp-for="UrlExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>File hashes<input asp-for="HashExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Email addresses<input asp-for="EmailExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Browser / software IDs<input asp-for="SoftwareIdExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>File / path artifacts<input asp-for="FileArtifactExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Host artifacts<input asp-for="HostArtifactExpiryDays" type="number" min="0" max="3650" required/><small>Registry, mutex, RPC, named pipe</small></label>
+<label>Certificate thumbprints<input asp-for="CertificateExpiryDays" type="number" min="0" max="3650" required/></label>
+<label>Other / generic indicators<input asp-for="OtherExpiryDays" type="number" min="0" max="3650" required/></label>
+<button class="button button-primary" type="submit">SAVE LIFETIMES</button></form><p class="form-footnote">Defaults: IPs and URLs 90 days; domains, hashes, emails, software IDs, file and host artifacts 365 days; certificate thumbprints 730 days. Other types use 365 days. Set any value to 0 to disable expiry for that type. Changes affect current results and API responses immediately.</p></section>
+
+@section Scripts {
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
+  const briefingFollowForm = document.querySelector('.briefing-follow-add');
+  const briefingFollowKind = document.getElementById('FollowKind');
+  const briefingFollowName = document.getElementById('FollowName');
+  const briefingFollowSuggestions = document.getElementById('briefing-follow-suggestions');
+  const briefingFollowCustomButton = document.querySelector('.briefing-follow-custom-submit');
+  const briefingFollowScrollKey = 'briefing-follow-scroll';
+  const briefingFollowScroll = sessionStorage.getItem(briefingFollowScrollKey);
+  if (briefingFollowScroll !== null) {
+    sessionStorage.removeItem(briefingFollowScrollKey);
+    requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo(0, Number(briefingFollowScroll))));
+  }
+  document.querySelectorAll('.briefing-follow-controls form').forEach(form => form.addEventListener('submit', () => {
+    sessionStorage.setItem(briefingFollowScrollKey, String(window.scrollY));
+  }));
+  if (briefingFollowForm && briefingFollowKind && briefingFollowName && briefingFollowSuggestions && briefingFollowCustomButton) {
+    const catalogByKind = {
+      vendor: Array.from(document.querySelectorAll('#briefing-vendors option'), option => option.value),
+      industry: Array.from(document.querySelectorAll('#briefing-industries option'), option => option.value),
+      product: Array.from(document.querySelectorAll('#briefing-products option'), option => option.value)
+    };
+    let activeSuggestion = -1;
+    const closeSuggestions = () => {
+      briefingFollowSuggestions.hidden = true;
+      briefingFollowSuggestions.replaceChildren();
+      briefingFollowName.setAttribute('aria-expanded', 'false');
+      briefingFollowName.removeAttribute('aria-activedescendant');
+      activeSuggestion = -1;
+    };
+    const submitSuggestion = name => {
+      briefingFollowName.value = name;
+      closeSuggestions();
+      briefingFollowForm.requestSubmit();
+    };
+    const renderSuggestions = () => {
+      const kind = briefingFollowKind.value;
+      const query = briefingFollowName.value.trim();
+      const normalizedQuery = query.toLocaleLowerCase();
+      const followed = new Set(Array.from(document.querySelectorAll('.briefing-follow-chip[data-kind="' + kind + '"]'), chip => chip.dataset.name.toLocaleLowerCase()));
+      const matches = catalogByKind[kind].filter(name => name.toLocaleLowerCase().includes(normalizedQuery) && !followed.has(name.toLocaleLowerCase())).slice(0, 8);
+      const exactMatch = catalogByKind[kind].some(name => name.toLocaleLowerCase() === normalizedQuery);
+      briefingFollowSuggestions.replaceChildren();
+      const addOption = (label, detail, value) => {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'briefing-follow-suggestion';
+        option.setAttribute('role', 'option');
+        option.id = 'briefing-follow-suggestion-' + briefingFollowSuggestions.children.length;
+        option.setAttribute('aria-selected', 'false');
+        const name = document.createElement('span');
+        name.textContent = label;
+        const source = document.createElement('span');
+        source.className = 'quiet-label';
+        source.textContent = detail;
+        option.append(name, source);
+        option.addEventListener('mousedown', event => event.preventDefault());
+        option.addEventListener('click', () => submitSuggestion(value));
+        briefingFollowSuggestions.append(option);
+      };
+      matches.forEach(name => addOption(name, 'CATALOG', name));
+      const alreadyFollowed = query.length > 0 && followed.has(normalizedQuery);
+      if (query.length >= 2 && !exactMatch && !alreadyFollowed) addOption('Add “' + query + '” as a new ' + kind, 'CUSTOM', query);
+      if (query.length >= 1 && matches.length === 0 && (query.length < 2 || exactMatch || alreadyFollowed)) return closeSuggestions();
+      if (briefingFollowSuggestions.children.length === 0) return closeSuggestions();
+      briefingFollowSuggestions.hidden = false;
+      briefingFollowName.setAttribute('aria-expanded', 'true');
+    };
+    const setActiveSuggestion = index => {
+      const options = Array.from(briefingFollowSuggestions.querySelectorAll('[role="option"]'));
+      if (options.length === 0) return;
+      activeSuggestion = (index + options.length) % options.length;
+      options.forEach((option, optionIndex) => {
+        option.classList.toggle('is-active', optionIndex === activeSuggestion);
+        option.setAttribute('aria-selected', optionIndex === activeSuggestion ? 'true' : 'false');
+      });
+      briefingFollowName.setAttribute('aria-activedescendant', options[activeSuggestion].id);
+    };
+    briefingFollowName.addEventListener('input', renderSuggestions);
+    briefingFollowName.addEventListener('focus', renderSuggestions);
+    briefingFollowName.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' && !briefingFollowSuggestions.hidden) { event.preventDefault(); setActiveSuggestion(activeSuggestion + 1); }
+      else if (event.key === 'ArrowUp' && !briefingFollowSuggestions.hidden) { event.preventDefault(); setActiveSuggestion(activeSuggestion < 0 ? briefingFollowSuggestions.children.length - 1 : activeSuggestion - 1); }
+      else if (event.key === 'Enter' && !briefingFollowSuggestions.hidden && activeSuggestion >= 0) { event.preventDefault(); briefingFollowSuggestions.children[activeSuggestion].click(); }
+      else if (event.key === 'Escape') closeSuggestions();
+    });
+    briefingFollowName.addEventListener('blur', () => setTimeout(closeSuggestions, 100));
+    briefingFollowKind.addEventListener('change', renderSuggestions);
+    briefingFollowCustomButton.addEventListener('click', event => {
+      if (briefingFollowName.value.trim().length < 2) {
+        event.preventDefault();
+        briefingFollowName.focus();
+      }
+    });
+  }
+  document.querySelector('[data-copy-target]')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const target = document.getElementById(button.dataset.copyTarget);
+    if (!target) return;
+    await navigator.clipboard.writeText(target.textContent.trim());
+    button.textContent = 'COPIED';
+    setTimeout(() => button.textContent = 'COPY', 1800);
+  });
+</script>
+}

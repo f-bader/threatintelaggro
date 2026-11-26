@@ -1,0 +1,73 @@
+@page
+@model IocsModel
+@inject ThreatIntelAggro.IocCountCache IocCountCache
+@{
+    ViewData["Title"] = "IOCs";
+    var fragment = ViewContext.HttpContext.Request.Headers["X-Review-Fragment"].ToString() == "iocs";
+    ViewContext.HttpContext.Response.Headers.Vary = "X-Review-Fragment";
+    if (fragment) Layout = null;
+}
+@if (!fragment) {
+<div class="page-heading"><div><div class="eyebrow">OBSERVABLES / INTELLIGENCE INDEX</div><h1>Indicator library</h1><p class="subhead">Article sourced indicators with affected vendors, targeted industries, and provenance.</p></div><a class="button button-secondary" asp-page="/Inbox">← &nbsp;Back to inbox</a></div>
+}
+<div data-filter-panel="iocs">
+<section class="panel" data-review-panel="iocs" data-review-count="@(fragment ? IocCountCache.GetCount() : 0)">
+ <div class="panel-head"><div><div class="eyebrow">PUBLISHED IN THE LAST @Model.Days DAYS</div><h2>@(Model.State == "archived" ? "Archived indicators" : "Indicators") <span class="count-chip">@Model.Records.Count</span></h2></div><div class="ioc-head-actions"><a class="button button-secondary" asp-page-handler="Csv" asp-route-days="@Model.Days" asp-route-vendor="@Model.Vendor" asp-route-industry="@Model.Industry" asp-route-type="@Model.Type" asp-route-search="@Model.Search" asp-route-state="@Model.State" asp-route-approval="@Model.Approval" asp-route-classification="@Model.Classification">DOWNLOAD CSV ↓</a><a class="button button-secondary" asp-page="/Iocs" asp-route-days="@Model.Days" asp-route-vendor="@Model.Vendor" asp-route-industry="@Model.Industry" asp-route-type="@Model.Type" asp-route-search="@Model.Search" asp-route-approval="@Model.Approval" asp-route-classification="@Model.Classification" asp-route-state="@(Model.State == "archived" ? "active" : "archived")">@(Model.State == "archived" ? "ACTIVE INDICATORS" : "ARCHIVE")</a></div></div>
+ <form method="get" class="ioc-filters" id="ioc-filter-form" data-fragment-filter data-filter-auto>
+  <input type="hidden" name="state" value="@Model.State"/>
+  <label>Time range<select name="days"><option value="7" selected="@(Model.Days == 7)">Last 7 days</option><option value="14" selected="@(Model.Days == 14)">Last 14 days</option><option value="30" selected="@(Model.Days == 30)">Last 30 days</option><option value="90" selected="@(Model.Days == 90)">Last 90 days</option><option value="365" selected="@(Model.Days == 365)">Last year</option><option value="3650" selected="@(Model.Days == 3650)">Last 10 years</option></select></label>
+  <label>Type<select name="type"><option value="">All types</option>@foreach (var value in Model.Types) { <option value="@value" selected="@(Model.Type == value)">@value</option> }</select></label>
+  <label>Vendor<select name="vendor"><option value="">All vendors</option>@foreach (var value in Model.Vendors) { <option value="@value" selected="@(Model.Vendor == value)">@value</option> }</select></label>
+  <label>Industry<select name="industry"><option value="">All industries</option>@foreach (var value in Model.Industries) { <option value="@value" title="@value" selected="@(Model.Industry == value)">@Model.IndustryLabel(value)</option> }</select></label>
+  <label>Classification<select name="classification"><option value="all" selected="@(Model.Classification == "all")">All</option>@foreach (var value in Model.Classifications) { <option value="@value" selected="@(Model.Classification == value)">@(value == "context" ? "Context only" : value == "suspicious" ? "Suspicious" : "Malicious")</option> }</select></label>
+  <label>Approval<select name="approval"><option value="all" selected="@(Model.Approval == "all")">All indicators</option><option value="pending" selected="@(Model.Approval == "pending")">Needs approval</option><option value="approved" selected="@(Model.Approval == "approved")">Approved only</option></select></label>
+  <label class="ioc-search">Search<input name="search" value="@Model.Search" placeholder="Value, context, article…"/></label><label class="ioc-api-toggle"><input type="checkbox" name="includeUnapproved" value="true" checked="@(Model.IncludeUnapproved)"/><span>Include unapproved in API example</span></label><span class="ioc-auto-apply"><i></i> AUTO APPLY</span>
+ </form>
+ <div class="ioc-review-summary"><strong>Within this time range: @Model.TotalInRange total</strong><span>@Model.ContextCount context only</span><span>@Model.PendingCount unapproved</span><span>@Model.ExpiredCount expired</span><span>@Model.ExcludedCount excluded</span><span>@Model.ArchivedCount archived</span><small>Counts can overlap and do not reflect the other filters.</small></div>
+ @if (Model.State != "archived" && Model.Records.Count > 0) {
+  <form id="bulk-classify-form" method="post" data-review-action asp-page-handler="BulkReview" class="ioc-bulk-review" data-bulk-selection>
+   <partial name="_IocFilterFields" model="Model"/>
+   <label class="bulk-select-all"><input type="checkbox" data-select-visible/><span>SELECT VISIBLE</span></label>
+   <span class="bulk-selection-count" data-selection-count aria-live="polite">0 selected</span>
+   <label>Classify selected<select name="bulkRole" data-selection-role aria-label="Classification for selected indicators"><option value="">Choose classification…</option><option value="suspicious">Suspicious</option><option value="malicious">Malicious</option></select></label>
+   <button class="small-action approve-ioc" data-selection-action="classify" type="submit" name="operation" value="classify" disabled>CLASSIFY SELECTED</button>
+   <button class="small-action approve-ioc" data-selection-action="approve" type="submit" name="operation" value="approve" disabled>APPROVE SELECTED</button>
+   <button class="small-action" data-selection-action="dismiss" type="submit" name="operation" value="dismiss" disabled>DISMISS SELECTED</button>
+   <small>Classify context-only IOCs; approve unapproved suspicious or malicious IOCs; dismiss any selected items. Existing approvals are retained when classifying.</small>
+  </form>
+ }
+ @if (Model.Records.Count == 0) { <div class="empty-state"><div class="empty-icon">⌁</div><h3>No indicators match</h3><p>Try a wider time range or clear one of the filters.</p></div> }
+ <div class="ioc-list">
+ @foreach (var ioc in Model.Records) {
+  var actionable = IocIndex.IsActionableRole(ioc.Role);
+  var roleClass = IocIndex.MatchesClassification(ioc.Role, "suspicious") ? "ioc-role-suspicious" : IocIndex.MatchesClassification(ioc.Role, "malicious") ? "ioc-role-malicious" : "ioc-role-context";
+  <article class="ioc-row" data-review-key="@IocsModel.BulkToken(ioc)">
+   <div class="ioc-type">@if (Model.State != "archived") { <label class="ioc-select"><input type="checkbox" data-selection-item data-actionable="@actionable.ToString().ToLowerInvariant()" data-approved="@ioc.Approved.ToString().ToLowerInvariant()" name="selection" form="bulk-classify-form" value="@IocsModel.BulkToken(ioc)" aria-label="Select indicator: @ioc.Value"/><span class="ioc-selection-marker" aria-hidden="true"></span><span class="sr-only">Select indicator: @ioc.Value</span></label> } else { <span class="ioc-selection-spacer" aria-hidden="true"></span> }<span class="ioc-type-label">@ioc.Type</span></div>
+   <div class="ioc-main">
+    <h3><code>@ioc.Value</code>@if (!string.IsNullOrWhiteSpace(ioc.NormalizedValue) && ioc.NormalizedValue != ioc.Value) { <small>Normalized: <code>@ioc.NormalizedValue</code></small> }</h3>
+    <p>@ioc.Context</p>
+    <div class="ioc-tags">@if (!string.IsNullOrWhiteSpace(ioc.Role)) { <span class="ioc-role @roleClass">@ioc.Role</span> }@if (ioc.OriginalRole is not null) { <span>Original role · @(string.IsNullOrWhiteSpace(ioc.OriginalRole) ? "unlabeled" : ioc.OriginalRole)</span> }@foreach (var vendor in ioc.Vendors) { <span>Vendor · @vendor</span> }@foreach (var industry in ioc.Industries) { <span>Industry · @industry</span> }@foreach (var mitre in ioc.Mitre) { <span>MITRE · @mitre</span> }</div>
+    <div class="ioc-links"><a class="small-action ioc-article-link" href="@ioc.ArticleUrl" target="_blank" rel="noopener noreferrer">@ioc.ArticleTitle ↗</a>@if (Model.VirusTotalUrl(ioc) is string vtUrl) { <a class="small-action" href="@vtUrl" target="_blank" rel="noopener noreferrer">OPEN IN VIRUSTOTAL ↗</a> }</div>
+   </div>
+   <div class="ioc-confidence">
+    <div class="ioc-status-line"><span class="ioc-approval @(actionable ? (ioc.Approved ? "approved" : "pending") : "pending")">@(actionable ? (ioc.Approved ? "APPROVED" : "NEEDS APPROVAL") : "CONTEXT ONLY")</span></div>
+    @if (!actionable) { <small class="ioc-status-note">@(ioc.Approved ? "Previously approved: classification makes it eligible for the API." : "Excluded from API and CSV until classified.")</small> }
+    <div class="ioc-dates">@if (ioc.ExpiresUtc is DateTimeOffset expiry) { <small title="Expires @expiry.ToLocalTime().ToString("dd MMM yyyy")">Active until @expiry.ToLocalTime().ToString("dd MMM yyyy")</small> } else { <small>No automatic expiry</small> }<small>@(DateTimeOffset.TryParse(ioc.ArticleDate, out var published) ? published.ToLocalTime().ToString("dd MMM yyyy") : "Date unknown")</small></div>
+    <div class="ioc-row-actions">
+     @if (Model.State == "archived") {
+      <form method="post" data-review-action asp-page-handler="Restore"><input type="hidden" name="articleId" value="@ioc.ArticleId"/><input type="hidden" name="iocType" value="@ioc.Type"/><input type="hidden" name="iocValue" value="@ioc.Value"/><partial name="_IocFilterFields" model="Model"/><button class="small-action" type="submit">RESTORE</button></form>
+     } else {
+      @if (!actionable) { <form method="post" data-review-action asp-page-handler="Classify" class="ioc-classify"><input type="hidden" name="articleId" value="@ioc.ArticleId"/><input type="hidden" name="iocType" value="@ioc.Type"/><input type="hidden" name="iocValue" value="@ioc.Value"/><partial name="_IocFilterFields" model="Model"/><select name="role" aria-label="Classification for @ioc.Value" required><option value="">Classify as…</option><option value="suspicious">Suspicious</option><option value="malicious">Malicious</option></select><button class="small-action approve-ioc" type="submit">CLASSIFY</button></form> }
+      @if (ioc.OriginalRole is not null) { <form method="post" data-review-action asp-page-handler="ResetClassification"><input type="hidden" name="articleId" value="@ioc.ArticleId"/><input type="hidden" name="iocType" value="@ioc.Type"/><input type="hidden" name="iocValue" value="@ioc.Value"/><partial name="_IocFilterFields" model="Model"/><button class="small-action" type="submit">RESET CLASSIFICATION</button></form> }
+      @if (!ioc.Approved && actionable) { <form method="post" data-review-action asp-page-handler="Approve"><input type="hidden" name="articleId" value="@ioc.ArticleId"/><input type="hidden" name="iocType" value="@ioc.Type"/><input type="hidden" name="iocValue" value="@ioc.Value"/><partial name="_IocFilterFields" model="Model"/><button class="small-action approve-ioc" type="submit">APPROVE</button></form> }
+      <form method="post" data-review-action asp-page-handler="Dismiss"><input type="hidden" name="articleId" value="@ioc.ArticleId"/><input type="hidden" name="iocType" value="@ioc.Type"/><input type="hidden" name="iocValue" value="@ioc.Value"/><partial name="_IocFilterFields" model="Model"/><button class="small-action" type="submit">DISMISS</button></form>
+     }
+    </div>
+   </div>
+  </article>
+ }
+ </div>
+ <div class="list-foot">@if (Model.State == "archived") { <span>Archived indicators are excluded from the read-only API.</span> } else { <><span>API: <code>GET @Model.ApiExampleUrl</code></span><span>Only malicious or suspicious indicators are included in API and CSV results. The API returns approved indicators by default; set <code>includeUnapproved=true</code> to include pending ones.</span></> }</div>
+</section>
+@if (Model.State != "archived") { <section class="panel api-panel"><div class="eyebrow">READ ONLY JSON API</div><h2>Matching indicators</h2><p>This request uses the current filters. Context-only indicators are excluded from the API.</p><pre><code>GET @Model.ApiExampleUrl</code></pre></section> }
+</div>

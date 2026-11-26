@@ -1,0 +1,33 @@
+@page "/Briefings"
+@model IndexModel
+@{
+  ViewData["Title"] = "Briefings";
+  var fragment = ViewContext.HttpContext.Request.Headers["X-Review-Fragment"].ToString() == "briefings";
+  ViewContext.HttpContext.Response.Headers.Vary = "X-Review-Fragment";
+  if (fragment) Layout = null;
+}
+<div class="page-heading"><div><div class="eyebrow"><span class="live-dot"></span> DAILY THREAT INTELLIGENCE / UTC</div><h1>Threat briefings</h1><p class="subhead">Decision-ready coverage for the vendors, industries, and products you follow.</p></div><a class="button button-secondary" asp-page="/Settings">BRIEFING SETTINGS</a></div>
+<div data-review-panel="briefings">
+@if (Model.GenerationStatus is { } job) { <p class="notice" role="status" data-manual-job="@ManualJobs.BriefingKey" data-job-state="@job.State">@job.Message</p> }
+@if (!string.IsNullOrWhiteSpace(Model.Notice)) { <div class="notice">@Model.Notice</div> }
+@if (Model.Latest is null) {
+  <section class="panel briefing-empty"><div class="eyebrow">NO BRIEFING ARCHIVED</div><h2>Follow vendors, industries, or products to start your briefing stream.</h2><p>Daily generation runs at the configured UTC time. A briefing is created only when applicable analyzed articles are available.</p><a class="button button-primary" asp-page="/Settings">CONFIGURE BRIEFING</a></section>
+} else {
+  <section class="panel briefing-panel"><div class="briefing-topline"><div><div class="eyebrow">LATEST DAILY BRIEFING</div><h2>@Model.Latest["title"]</h2><p class="subhead">@DateTimeOffset.Parse(Model.Latest["window_start_utc"]!).ToString("dd MMM yyyy HH:mm") – @DateTimeOffset.Parse(Model.Latest["window_end_utc"]!).ToString("dd MMM yyyy HH:mm") UTC</p></div><div class="briefing-actions"><a class="button button-secondary" href="/Briefings?handler=Markdown&amp;id=@Model.Latest["id"]">DOWNLOAD MARKDOWN</a><a class="button button-secondary" href="/Briefings?handler=Pdf&amp;id=@Model.Latest["id"]">DOWNLOAD PDF</a></div></div>
+  <section class="briefing-section"><div class="eyebrow">EXECUTIVE BRIEFING</div><p>@Model.Latest["executive_summary"]</p></section>
+  <section class="briefing-section"><div class="eyebrow">APPLICABLE ARTICLES · @Model.Articles.Length</div><ul class="briefing-articles">@foreach (var a in Model.Articles) { <li><a href="@a.GetProperty("Url").GetString()" target="_blank" rel="noopener noreferrer">@a.GetProperty("Title").GetString() ↗</a><span>@a.GetProperty("PublishedUtc").GetString()</span><small>@if (a.GetProperty("VendorMatches").GetString() is string v && v.Length > 0) { <text>Vendors: @v</text> } @if (a.GetProperty("IndustryMatches").GetString() is string i && i.Length > 0) { <text> · Industries: @i</text> } @if (BriefingView.ProductMatches(a) is string p && p.Length > 0) { <text> · Products: @p</text> }</small></li> }</ul></section>
+  <div class="briefing-summary-grid">
+    <section class="briefing-section"><div class="eyebrow">DETECTION SUMMARY</div>
+      @if (Model.Detections.Length == 0) { <p>No linked detections.</p> }
+      else { <div class="briefing-detections">@foreach (var detection in Model.Detections) { <article><h3>@detection.Title</h3><p>@detection.Description</p></article> }</div> }
+    </section>
+    <section class="briefing-section"><div class="eyebrow">IOC SUMMARY</div><p>@Model.Latest["ioc_summary"]</p>
+      @if (Model.Iocs.Length == 0) { <p class="form-footnote">No IOC values are available for this archived briefing.</p> }
+      else { <div class="briefing-ioc-table-wrap"><table class="briefing-ioc-table"><thead><tr><th>Type</th><th>Defanged value</th><th>Role</th></tr></thead><tbody>@foreach (var ioc in Model.Iocs) { <tr><td>@ioc.Type</td><td><code>@ioc.Value</code></td><td>@ioc.Role</td></tr> }</tbody></table></div> }
+    </section>
+  </div></section>
+}
+<section class="panel briefing-archive"><div class="panel-head"><div><div class="eyebrow">HISTORICAL SNAPSHOTS</div><h2>Briefing archive <span class="count-chip">@Model.Archive.Count</span></h2></div><form method="post" data-review-action asp-page-handler="Generate"><button class="button button-primary" type="submit">GENERATE NOW</button></form></div>
+@if (Model.Archive.Count == 0) { <p class="form-footnote">Briefings will be archived here as they are generated.</p> } else { <div class="briefing-archive-list">@foreach (var item in Model.Archive) { <article><div><a href="/briefings/@item["id"]">@item["title"]</a><small>@DateTimeOffset.Parse(item["window_start_utc"]!).ToString("dd MMM HH:mm") – @DateTimeOffset.Parse(item["window_end_utc"]!).ToString("dd MMM HH:mm") UTC</small></div><div class="briefing-actions"><a class="small-action" href="/Briefings?handler=Markdown&amp;id=@item["id"]">MD</a><a class="small-action" href="/Briefings?handler=Pdf&amp;id=@item["id"]">PDF</a></div></article> }</div> }</section>
+
+</div>

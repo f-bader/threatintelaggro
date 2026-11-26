@@ -1,0 +1,59 @@
+@inject ThreatIntelAggro.AppDatabase Database
+@inject ThreatIntelAggro.IocCountCache IocCountCache
+@{
+    var unreadCount = Database.ScalarInt("SELECT COUNT(*) FROM articles WHERE is_read=0");
+    var draftCount = Database.ScalarInt("SELECT COUNT(*) FROM detections WHERE archived=0");
+    var feedCount = Database.ScalarInt("SELECT COUNT(*) FROM feeds");
+    var iocCount = IocCountCache.GetCount();
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#080c10" />
+  <link rel="icon" type="image/svg+xml" href="~/favicon.svg" />
+  <title>@ViewData["Title"] · Threat Intel Aggro</title>
+  <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+  <script src="~/js/site.js" asp-append-version="true"></script>
+</head>
+<body>
+<div class="console-shell">
+  <header class="console-header">
+    <a class="brand" asp-page="/Inbox" aria-label="Threat Intel Aggro home">
+      <span class="brand-orbit"><i></i><b></b></span>
+      <span class="brand-copy"><strong>THREAT INTEL <em>//</em> AGGRO</strong><small>NODE LOCAL · OP SINGLE USER</small></span>
+    </a>
+    <div class="system-readout"><span class="online-mark"></span><span>UPLINK</span><time id="local-clock">--:--:--</time><span class="readout-separator">/</span><span>LOCAL INSTANCE</span></div>
+  </header>
+  <main class="console-main">
+    <nav class="console-tabs" aria-label="Workspace">
+      <a class="console-tab @(ViewData["Title"]?.ToString() == "Intel Inbox" ? "active" : "")" asp-page="/Inbox"><span class="tab-label">INBOX</span><span class="tab-count" data-workspace-count="inbox">@unreadCount</span></a>
+      <a class="console-tab @(ViewData["Title"]?.ToString() is "Briefings" or "Briefing Archive" ? "active" : "")" asp-page="/Index"><span class="tab-label">BRIEFINGS</span></a>
+      <a class="console-tab @(ViewData["Title"]?.ToString() == "Insights" ? "active" : "")" asp-page="/Insights"><span class="tab-label">INSIGHTS</span></a>
+      <a class="console-tab @(ViewData["Title"]?.ToString() == "Graph" ? "active" : "")" asp-page="/Graph"><span class="tab-label">GRAPH</span></a>
+      <a class="console-tab @(ViewData["Title"]?.ToString() == "Detection Ideas" ? "active" : "")" asp-page="/Detections"><span class="tab-label desktop-only">DETECTION IDEAS</span><span class="tab-label mobile-only">DETECTIONS</span><span class="tab-count" data-workspace-count="detections">@draftCount</span></a>
+      <a class="console-tab @(ViewData["Title"]?.ToString() == "Feeds" ? "active" : "")" asp-page="/Feeds"><span class="tab-label">SOURCES</span><span class="tab-count" data-workspace-count="feeds">@feedCount</span></a>
+      <a class="console-tab compact-tab @(ViewData["Title"]?.ToString() == "IOCs" ? "active" : "")" asp-page="/Iocs"><span class="tab-label">IOCS</span><span class="tab-count" data-workspace-count="iocs">@iocCount</span></a>
+      <a class="console-tab compact-tab @(ViewData["Title"]?.ToString() == "Settings" ? "active" : "")" asp-page="/Settings"><span class="tab-label">SETTINGS</span></a>
+      @if (IocExclusionSettings.Get(Database, "diagnostics_visible") == "true") { <a class="console-tab diagnostics-tab @(ViewData["Title"]?.ToString() == "Diagnostics" ? "active" : "")" asp-page="/Diagnostics"><span class="tab-label desktop-only">DIAGNOSTICS</span><span class="tab-label mobile-only">LOGS</span></a> }
+      <div class="tab-rule"></div>
+    </nav>
+    <div class="console-content">@RenderBody()</div>
+  </main>
+</div>
+<script nonce="@ViewContext.HttpContext.Items["CspNonce"]">
+  document.addEventListener('change', event => {
+    if (event.target.matches('[data-auto-submit]')) event.target.form?.requestSubmit();
+  });
+  document.addEventListener('submit', event => {
+    const message = event.target.dataset.confirm;
+    if (message && !window.confirm(message)) event.preventDefault();
+  });
+  const clock = document.getElementById('local-clock');
+  const tick = () => { if (clock) clock.textContent = new Intl.DateTimeFormat(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date()); };
+  tick(); setInterval(tick, 1000);
+</script>
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

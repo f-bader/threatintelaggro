@@ -1,0 +1,12 @@
+@page "/briefings/{id:long}"
+@model BriefingDetailModel
+@{
+  ViewData["Title"] = "Briefing Archive";
+}
+<div class="page-heading"><div><div class="eyebrow">ARCHIVED BRIEFING</div><h1>@Model.Item!["title"]</h1><p class="subhead">@Model.Item["window_start_utc"] – @Model.Item["window_end_utc"] UTC</p></div><a class="button button-secondary" asp-page="/Index">← BRIEFINGS</a></div>
+<section class="panel briefing-panel">
+  <section class="briefing-section"><div class="eyebrow">EXECUTIVE BRIEFING</div><p>@Model.Item["executive_summary"]</p></section>
+  <section class="briefing-section"><div class="eyebrow">APPLICABLE ARTICLES</div><ul class="briefing-articles">@foreach (var a in Model.Articles) { <li><a href="@a.GetProperty("Url").GetString()" target="_blank" rel="noopener noreferrer">@a.GetProperty("Title").GetString() ↗</a><small>@if (a.GetProperty("VendorMatches").GetString() is string vendors && vendors.Length > 0) { <text>Vendors: @vendors</text> }@if (a.GetProperty("IndustryMatches").GetString() is string industries && industries.Length > 0) { <text> · Industries: @industries</text> }@if (BriefingView.ProductMatches(a) is string products && products.Length > 0) { <text> · Products: @products</text> }</small></li> }</ul></section>
+  <section class="briefing-section"><div class="eyebrow">DETECTION SUMMARY</div>@if (Model.Detections.Length == 0) { <p>No linked detections.</p> } else { <div class="briefing-detections">@foreach (var detection in Model.Detections) { <article><h3>@detection.Title</h3><p>@detection.Description</p></article> }</div> }</section>
+  <section class="briefing-section"><div class="eyebrow">IOC SUMMARY</div><p>@Model.Item["ioc_summary"]</p>@if (Model.Iocs.Length == 0) { <p class="form-footnote">No IOC values are available for this archived briefing.</p> } else { <div class="briefing-ioc-table-wrap"><table class="briefing-ioc-table"><thead><tr><th>Type</th><th>Defanged value</th><th>Role</th></tr></thead><tbody>@foreach (var ioc in Model.Iocs) { <tr><td>@ioc.Type</td><td><code>@ioc.Value</code></td><td>@ioc.Role</td></tr> }</tbody></table></div> }</section>
+</section>
