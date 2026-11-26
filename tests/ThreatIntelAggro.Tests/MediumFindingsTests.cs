@@ -134,10 +134,12 @@ public sealed class MediumFindingsTests
         using var fixture = DatabaseFixture.Create();
         var db = fixture.Database;
         db.Execute("INSERT INTO feeds(title,url,created_utc) VALUES(?,?,?)", "Fixture feed", "https://example.test/feed.xml", DateTimeOffset.UtcNow.ToString("O"));
-        var feedXml = """
+        var published = DateTimeOffset.UtcNow.AddDays(-3);
+        var updated = published.AddDays(2);
+        var feedXml = $"""
             <feed><title>Fixture feed</title><entry>
               <title>Published article</title><link href="https://example.test/article"/>
-              <updated>2026-11-14T18:56:00Z</updated><published>2026-11-12T16:20:00Z</published>
+              <updated>{updated:O}</updated><published>{published:O}</published>
             </entry></feed>
             """;
         using var fetcher = new SafePublicFetcher(new StaticResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(feedXml, Encoding.UTF8, "application/atom+xml") }));
@@ -146,7 +148,7 @@ public sealed class MediumFindingsTests
         Assert.Equal(1, await reader.RefreshAsync(1));
 
         var article = db.Query("SELECT published_utc,first_seen_utc FROM articles").Single();
-        Assert.Equal("2026-11-12T16:20:00.0000000+00:00", article["published_utc"]);
+        Assert.Equal(published.ToString("O"), article["published_utc"]);
         Assert.NotEqual(article["published_utc"], article["first_seen_utc"]);
     }
 
